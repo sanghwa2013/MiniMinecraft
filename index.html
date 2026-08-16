@@ -156,7 +156,6 @@
 <div id="hud">
   <div>FPS: <span id="fps-val">0</span></div>
   <div>XYZ: <span id="x-val">0</span> / <span id="y-val">0</span> / <span id="z-val">0</span></div>
-  <div id="chunk-status"></div>
 </div>
 
 <div id="blocker">
@@ -246,8 +245,9 @@
   const scene = new THREE.Scene();
   const skyColor = new THREE.Color(0x7ec0ee);
   const waterFogColor = new THREE.Color(0x0a3d62);
+  
   scene.background = skyColor;
-  scene.fog = new THREE.FogExp2(skyColor, 0.015);
+  scene.fog = new THREE.Fog(skyColor, 20, 48);
 
   const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.05, 1000);
 
@@ -436,7 +436,7 @@
   waterMesh.count = 0;
   waterMesh.castShadow = false;
   waterMesh.receiveShadow = true;
-  waterMesh.renderOrder = 1; // 물 블록 투명도 순서 보정
+  waterMesh.renderOrder = 1;
   waterMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
   scene.add(waterMesh);
   const waterLayer = { mesh: waterMesh, count: 0, capacity: CAPACITY[10], slotToKey: [] };
@@ -574,13 +574,13 @@
 
   // ---------- Terrain & Biomes & Trees ----------
   const SEA_LEVEL = 0;
+  const MIN_Y = -12; // 최하단 깊이 제한 설정
 
   function heightAt(x, z) {
     const h = perlinLike(x, z);
     return Math.floor(h);
   }
 
-  // 풍성한 구형 잎사귀 생성 로직 보정
   function plantTree(tx, ty, tz) {
     const treeHeight = 5 + Math.floor(hash2(tx, tz) * 2);
     for (let y = 0; y < treeHeight; y++) {
@@ -599,7 +599,6 @@
     }
   }
 
-  const YMIN = 0; // 베드락 최소 높이
   const CHUNK_SIZE = 16;
   const RENDER_DISTANCE = 3;
   const chunks = new Map();
@@ -624,18 +623,16 @@
       for (let lz = 0; lz < CHUNK_SIZE; lz++) {
         const x = cx * CHUNK_SIZE + lx, z = cz * CHUNK_SIZE + lz;
         const h = heightAt(x, z);
+        const maxY = Math.max(h, SEA_LEVEL);
 
-        // Y=0 위치 베드락 생성
-        addBlock(x, 0, z, BEDROCK);
-
-        for (let y = 1; y <= Math.max(h, SEA_LEVEL); y++) {
+        for (let y = MIN_Y; y <= maxY; y++) {
           const k = key(x, y, z);
           if (chunk.modifications.has(k)) {
             const mod = chunk.modifications.get(k);
             if (mod.action === 'add') addBlock(x, y, z, mod.typeIndex);
           } else {
-            if (y > h && y <= SEA_LEVEL) {
-              addBlock(x, y, z, WATER);
+            if (y === MIN_Y) {
+              addBlock(x, y, z, BEDROCK);
             } else if (y <= h) {
               if (y === h) {
                 if (h <= SEA_LEVEL + 1) addBlock(x, y, z, SAND);
@@ -646,12 +643,13 @@
               } else {
                 addBlock(x, y, z, STONE);
               }
+            } else if (y > h && y <= SEA_LEVEL) { // 🔥 y === SEA_LEVEL 대신 y <= SEA_LEVEL 로 수정 (바닥까지 물 채움)
+              addBlock(x, y, z, WATER);
             }
           }
           chunk.blockKeys.add(k);
         }
 
-        // 나무 배치
         if (h > SEA_LEVEL + 1 && hash2(x * 1.5, z * 2.3) < 0.02) {
           plantTree(x, h + 1, z);
         }
@@ -673,8 +671,9 @@
   ensureChunksAroundPlayer(0, 0);
 
   // ---------- Player Controller ----------
+  // 나무 내 스폰을 방지하기 위해 +8 여유를 두고 높은 위치에서 스폰
   const player = {
-    pos: new THREE.Vector3(0.5, Math.max(heightAt(0, 0), SEA_LEVEL) + 5, 0.5),
+    pos: new THREE.Vector3(0.5, Math.max(heightAt(0, 0) + 8, SEA_LEVEL + 5), 0.5),
     velocity: new THREE.Vector3(0, 0, 0),
     onGround: false,
     inWater: false,
@@ -760,6 +759,7 @@
     return entry && entry.typeIndex === WATER;
   }
 
+  // 물 블록도 레이캐스트 타겟으로 정확히 인지하도록 수정
   function getTargetedBlock() {
     const dir = new THREE.Vector3();
     camera.getWorldDirection(dir);
@@ -777,7 +777,7 @@
     let dist = 0;
 
     while (dist < 7) {
-      if (isSolidAt(x, y, z)) {
+      if (world.has(key(x, y, z))) {
         return { gx: x, gy: y, gz: z, px: x - normX, py: y - normY, pz: z - normZ };
       }
       if (maxX < maxY) {
@@ -797,7 +797,7 @@
     if (!hit) return;
     const entry = world.get(key(hit.gx, hit.gy, hit.gz));
     if (entry) {
-      if (entry.typeIndex === BEDROCK) return; // 베드락 파괴 방지
+      if (entry.typeIndex === BEDROCK) return;
       spawnBlockParticles(hit.gx, hit.gy, hit.gz, BLOCK_DEFS[entry.typeIndex].color);
       playSound('break');
     }
@@ -882,27 +882,25 @@
     const headInWater = isWaterAt(Math.floor(player.pos.x), Math.floor(player.pos.y), Math.floor(player.pos.z));
     player.inWater = footInWater || headInWater;
 
-    // 수중 시야 및 안개 처리 보정
     if (headInWater) {
       waterOverlayEl.style.display = 'block';
       scene.background = waterFogColor;
-      scene.fog.color = waterFogColor;
-      scene.fog.density = 0.12;
+      scene.fog = new THREE.Fog(waterFogColor, 2, 12);
     } else {
       waterOverlayEl.style.display = 'none';
       scene.background = skyColor;
-      scene.fog.color = skyColor;
-      scene.fog.density = 0.015;
+      scene.fog = new THREE.Fog(skyColor, 20, 48);
     }
 
     if (player.inWater) {
-      player.velocity.x = moveX * MOVE_SPEED * 0.5;
-      player.velocity.z = moveZ * MOVE_SPEED * 0.5;
+      player.velocity.x = moveX * MOVE_SPEED * 0.7;
+      player.velocity.z = moveZ * MOVE_SPEED * 0.7;
       
+      // 수중 부력/상승 속도를 대폭 늘려 물가 점프 가능하게 수정
       if (keys['Space']) {
-        player.velocity.y = 4.0;
+        player.velocity.y = 7.5;
       } else {
-        player.velocity.y = -1.5;
+        player.velocity.y = -2.0;
       }
     } else {
       player.velocity.x = moveX * MOVE_SPEED;
@@ -941,9 +939,8 @@
       stepTimer = 0;
     }
 
-    // 추락 리스폰 보정
-    if (player.pos.y < -30) {
-      player.pos.set(0.5, Math.max(heightAt(0, 0), SEA_LEVEL) + 5, 0.5);
+    if (player.pos.y < MIN_Y - 10) {
+      player.pos.set(0.5, Math.max(heightAt(0, 0) + 8, SEA_LEVEL + 5), 0.5);
       player.velocity.set(0, 0, 0);
     }
 
@@ -958,7 +955,6 @@
     ));
     camera.lookAt(target);
 
-    // 햇빛 위치 동적 동기화
     sun.position.set(player.pos.x + 40, player.pos.y + 60, player.pos.z + 30);
     sun.target.position.copy(player.pos);
     sun.target.updateMatrixWorld();
