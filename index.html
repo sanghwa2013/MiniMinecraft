@@ -762,7 +762,7 @@ function generateChunk(cx, cz) {
   }
 
   // 물 블록도 레이캐스트 타겟으로 정확히 인지하도록 수정
-  function getTargetedBlock() {
+ function getTargetedBlock() {
     const dir = new THREE.Vector3();
     camera.getWorldDirection(dir);
     const origin = camera.position;
@@ -779,7 +779,8 @@ function generateChunk(cx, cz) {
     let dist = 0;
 
     while (dist < 7) {
-      if (world.has(key(x, y, z))) {
+      // 🔥 물(WATER)은 통과하고, 땅/돌 같은 고체 블록(isSolidAt)만 타겟팅!
+      if (isSolidAt(x, y, z)) {
         return { gx: x, gy: y, gz: z, px: x - normX, py: y - normY, pz: z - normZ };
       }
       if (maxX < maxY) {
@@ -808,7 +809,7 @@ function generateChunk(cx, cz) {
     removeBlockAt(hit.gx, hit.gy, hit.gz);
   }
 
-  function placeTargetedBlock() {
+ function placeTargetedBlock() {
     triggerSwing();
     const hit = getTargetedBlock();
     if (!hit) return;
@@ -819,6 +820,11 @@ function generateChunk(cx, cz) {
     const pMinY = player.pos.y - player.height, pMaxY = player.pos.y;
 
     if (pMinX < nx + 1 && pMaxX > nx && pMinY < ny + 1 && pMaxY > ny && pMinZ < nz + 1 && pMaxZ > nz) return;
+
+    // 🔥 설치하려는 공간에 물이 차 있다면 물을 지워주고 블록을 밀어넣음!
+    if (isWaterAt(nx, ny, nz)) {
+      removeBlockAt(nx, ny, nz);
+    }
 
     const c = chunkFor(nx, nz);
     c.modifications.set(key(nx, ny, nz), { action: 'add', typeIndex: selectedSlot });
