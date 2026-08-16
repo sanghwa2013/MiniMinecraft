@@ -98,7 +98,7 @@
   const yEl = document.getElementById('y-val');
   const zEl = document.getElementById('z-val');
 
-  // ---------- Web Audio API (사운드 시스템 - 개선됨) ----------
+  // ---------- Web Audio API (사운드 시스템) ----------
   const AudioCtx = window.AudioContext || window.webkitAudioContext;
   let audioCtx = null;
 
@@ -164,6 +164,7 @@
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.BasicShadowMap;
   container.appendChild(renderer.domElement);
 
   const hemi = new THREE.HemisphereLight(0xffffff, 0x444444, 0.85);
@@ -171,6 +172,12 @@
   const sun = new THREE.DirectionalLight(0xffffff, 0.8);
   sun.position.set(60, 90, 40);
   sun.castShadow = true;
+  sun.shadow.camera.left = -100;
+  sun.shadow.camera.right = 100;
+  sun.shadow.camera.top = 100;
+  sun.shadow.camera.bottom = -100;
+  sun.shadow.mapSize.width = 1024;
+  sun.shadow.mapSize.height = 1024;
   scene.add(sun);
 
   // ---------- Math Helpers & Noise ----------
@@ -254,16 +261,37 @@
     ctx.globalAlpha = 1;
     return toTexture(canvas);
   }
-  function waterTexture() {
-    const base = new THREE.Color(0x3d7fd9);
-    const canvas = makeCanvas(); const ctx = canvas.getContext('2d');
-    for (let y = 0; y < 16; y++) for (let x = 0; x < 16; x++) {
-      px(ctx, x, y, '#' + jitterColor(base, 0.25, x * 9 + y * 7).getHexString());
-    }
-    return toTexture(canvas);
-  }
 
-  // ---------- Block Definitions (9개 - 인벤토리용, 물은 지형 생성만 사용) ----------
+  // ---------- 동적 물 텍스처 시스템 ----------
+  let waterTime = 0;
+  const waterTextures = [];
+  function generateWaterTextures() {
+    for (let frame = 0; frame < 4; frame++) {
+      const canvas = makeCanvas();
+      const ctx = canvas.getContext('2d');
+      const base = new THREE.Color(0x3d7fd9);
+      
+      for (let y = 0; y < 16; y++) {
+        for (let x = 0; x < 16; x++) {
+          const wave = Math.sin((x + frame * 4) * 0.3) * 0.5 + Math.cos((y + frame * 4) * 0.3) * 0.5;
+          const wave2 = Math.sin((x - y + frame * 5) * 0.2) * 0.3;
+          const intensity = (wave + wave2 + 1) / 3;
+          
+          const colorVar = jitterColor(base, 0.15, x * 9 + y * 7 + frame);
+          const c = colorVar.clone();
+          const hsl = { h: 0, s: 0, l: 0 };
+          c.getHSL(hsl);
+          c.setHSL(hsl.h, hsl.s, Math.min(1, Math.max(0, hsl.l + intensity * 0.15)));
+          
+          px(ctx, x, y, '#' + c.getHexString());
+        }
+      }
+      waterTextures.push(toTexture(canvas));
+    }
+  }
+  generateWaterTextures();
+
+  // ---------- Block Definitions ----------
   const boxGeo = new THREE.BoxGeometry(1, 1, 1);
   function matFromTex(tex) { return new THREE.MeshLambertMaterial({ map: tex }); }
 
@@ -279,7 +307,7 @@
   const gravelMat = matFromTex(noiseTexture(0x8d8d84, 0.22));
   const brickMat = matFromTex(brickTexture(0xa8442f, 0xcac0af));
   const glassMat = new THREE.MeshLambertMaterial({ map: glassTexture(0xbfe8ff), transparent: true, opacity: 0.6 });
-  const waterMat = new THREE.MeshLambertMaterial({ map: waterTexture(), transparent: true, opacity: 0.7 });
+  const waterMat = new THREE.MeshLambertMaterial({ map: waterTextures[0], transparent: true, opacity: 0.7 });
 
   const grassMatArr = [grassSide, grassSide, grassTop, grassBottom, grassSide, grassSide];
   const woodMatArr = [woodSide, woodSide, woodTop, woodTop, woodSide, woodSide];
@@ -295,25 +323,28 @@
     { name: '벽돌', material: brickMat, color: 0xa8442f },
     { name: '유리', material: glassMat, color: 0xbfe8ff },
   ];
-  const CAPACITY = [35000, 80000, 300000, 15000, 30000, 100000, 15000, 15000, 15000, 50000];
+
+  // ---------- 성능 최적화: 용량 감소 & LOD 시스템 ----------
+  const CAPACITY = [20000, 40000, 100000, 8000, 15000, 50000, 8000, 8000, 8000, 30000];
   const GRASS = 0, DIRT = 1, STONE = 2, WOOD = 3, LEAVES = 4, SAND = 5, GRAVEL = 6, BRICK = 7, GLASS = 8, WATER = 9;
 
-  // ---------- Instanced Meshes ----------
+  // ---------- Instanced Meshes (LOD 최적화) ----------
   const blockLayers = BLOCK_DEFS.map((def, typeIndex) => {
     const mesh = new THREE.InstancedMesh(boxGeo, def.material, CAPACITY[typeIndex]);
     mesh.count = 0;
     mesh.castShadow = true;
     mesh.receiveShadow = true;
+    mesh.frustumCulled = true;
     mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     scene.add(mesh);
     return { mesh, count: 0, capacity: CAPACITY[typeIndex], slotToKey: [] };
   });
 
-  // 물용 별도 레이어 (지형 생성만 사용)
   const waterMesh = new THREE.InstancedMesh(boxGeo, waterMat, CAPACITY[9]);
   waterMesh.count = 0;
   waterMesh.castShadow = false;
   waterMesh.receiveShadow = true;
+  waterMesh.frustumCulled = true;
   waterMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
   scene.add(waterMesh);
   const waterLayer = { mesh: waterMesh, count: 0, capacity: CAPACITY[9], slotToKey: [] };
@@ -473,7 +504,7 @@
 
   const YMIN = -16;
   const CHUNK_SIZE = 16;
-  const RENDER_DISTANCE = 3;
+  const RENDER_DISTANCE = 2;
   const chunks = new Map();
 
   function chunkFor(x, z) {
@@ -575,7 +606,7 @@
     player.pitch = Math.max(-Math.PI / 2 + 0.01, Math.min(Math.PI / 2 - 0.01, player.pitch));
   });
 
-  // ---------- Hotbar UI (1~9번 - 인벤토리만) ----------
+  // ---------- Hotbar UI ----------
   const hotbarEl = document.getElementById('hotbar');
   function iconDataURL(def) {
     const mat = Array.isArray(def.material) ? def.material[2] : def.material;
@@ -676,7 +707,7 @@
   });
   renderer.domElement.addEventListener('contextmenu', (e) => e.preventDefault());
 
-  // ---------- 아웃라인 (검정 윤곽선) ----------
+  // ---------- Block Selection Outline ----------
   const outlineGeo = new THREE.EdgesGeometry(new THREE.BoxGeometry(1.005, 1.005, 1.005));
   const outlineMat = new THREE.LineBasicMaterial({ color: 0x000000, linewidth: 2 });
   const outline = new THREE.LineSegments(outlineGeo, outlineMat);
@@ -772,7 +803,7 @@
     ensureChunksAroundPlayer(player.pos.x, player.pos.z);
   }
 
-  // ---------- Loop ----------
+  // ---------- Main Loop ----------
   const clock = new THREE.Clock();
   let fpsSmooth = 60;
   let frameCount = 0;
@@ -785,6 +816,11 @@
       updatePlayer(dt);
       updateParticles(dt);
       updateOutline();
+
+      // 물 텍스처 애니메이션
+      waterTime += dt;
+      const frame = Math.floor(waterTime * 4) % waterTextures.length;
+      waterMat.map = waterTextures[frame];
     }
 
     frameCount++;
