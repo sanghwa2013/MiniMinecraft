@@ -1,10 +1,9 @@
-
 <!DOCTYPE html>
 <html lang="ko">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>미니 마인크래프트 (Geographic & Water Update)</title>
+<title>미니 마인크래프트</title>
 <style>
   html, body { 
     margin: 0; 
@@ -248,7 +247,7 @@
   const skyColor = new THREE.Color(0x7ec0ee);
   const waterFogColor = new THREE.Color(0x0a3d62);
   scene.background = skyColor;
-  scene.fog = new THREE.FogExp2(skyColor, 0.02);
+  scene.fog = new THREE.FogExp2(skyColor, 0.015);
 
   const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.05, 1000);
 
@@ -280,7 +279,6 @@
     return s - Math.floor(s);
   }
 
-  // Simple multi-frequency noise for varied landscapes
   function perlinLike(x, z) {
     const n1 = Math.sin(x * 0.04) * Math.cos(z * 0.04) * 12;
     const n2 = Math.sin(x * 0.1 + 1.5) * Math.cos(z * 0.1 + 0.8) * 5;
@@ -371,6 +369,14 @@
     }
     return toTexture(canvas);
   }
+  function bedrockTexture() {
+    const base = new THREE.Color(0x333333);
+    const canvas = makeCanvas(); const ctx = canvas.getContext('2d');
+    for (let y = 0; y < 16; y++) for (let x = 0; x < 16; x++) {
+      px(ctx, x, y, '#' + jitterColor(base, 0.35, x * 13 + y * 11).getHexString());
+    }
+    return toTexture(canvas);
+  }
 
   // ---------- Block Definitions ----------
   const boxGeo = new THREE.BoxGeometry(1, 1, 1);
@@ -388,6 +394,7 @@
   const gravelMat = matFromTex(noiseTexture(0x8d8d84, 0.22));
   const brickMat = matFromTex(brickTexture(0xa8442f, 0xcac0af));
   const glassMat = new THREE.MeshLambertMaterial({ map: glassTexture(0xbfe8ff), transparent: true, opacity: 0.6 });
+  const bedrockMat = matFromTex(bedrockTexture());
   
   const waterMat = new THREE.MeshLambertMaterial({ 
     map: waterTexture(), 
@@ -409,9 +416,10 @@
     { name: '자갈', material: gravelMat, color: 0x8d8d84 },
     { name: '벽돌', material: brickMat, color: 0xa8442f },
     { name: '유리', material: glassMat, color: 0xbfe8ff },
+    { name: '기반암', material: bedrockMat, color: 0x333333 }
   ];
-  const CAPACITY = [35000, 80000, 300000, 15000, 30000, 100000, 15000, 15000, 15000, 50000];
-  const GRASS = 0, DIRT = 1, STONE = 2, WOOD = 3, LEAVES = 4, SAND = 5, GRAVEL = 6, BRICK = 7, GLASS = 8, WATER = 9;
+  const CAPACITY = [35000, 80000, 300000, 15000, 30000, 100000, 15000, 15000, 15000, 35000, 50000];
+  const GRASS = 0, DIRT = 1, STONE = 2, WOOD = 3, LEAVES = 4, SAND = 5, GRAVEL = 6, BRICK = 7, GLASS = 8, BEDROCK = 9, WATER = 10;
 
   // ---------- Instanced Meshes ----------
   const blockLayers = BLOCK_DEFS.map((def, typeIndex) => {
@@ -424,13 +432,14 @@
     return { mesh, count: 0, capacity: CAPACITY[typeIndex], slotToKey: [] };
   });
 
-  const waterMesh = new THREE.InstancedMesh(boxGeo, waterMat, CAPACITY[9]);
+  const waterMesh = new THREE.InstancedMesh(boxGeo, waterMat, CAPACITY[10]);
   waterMesh.count = 0;
   waterMesh.castShadow = false;
   waterMesh.receiveShadow = true;
+  waterMesh.renderOrder = 1; // 물 블록 투명도 순서 보정
   waterMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
   scene.add(waterMesh);
-  const waterLayer = { mesh: waterMesh, count: 0, capacity: CAPACITY[9], slotToKey: [] };
+  const waterLayer = { mesh: waterMesh, count: 0, capacity: CAPACITY[10], slotToKey: [] };
 
   const world = new Map();
   const key = (x, y, z) => x + ',' + y + ',' + z;
@@ -472,8 +481,7 @@
     layer.mesh.instanceMatrix.needsUpdate = true;
     world.delete(k);
   }
-
-  // ---------- 파괴 파티클 시스템 ----------
+  // ---------- 파티클 시스템 ----------
   const particles = [];
   const particleGeo = new THREE.BoxGeometry(0.12, 0.12, 0.12);
   const particleMaterials = new Map();
@@ -511,7 +519,7 @@
     }
   }
 
-  // ---------- 1인칭 손 & 들고 있는 블록 시스템 ----------
+  // ---------- 1인칭 손 & 들고 있는 블록 ----------
   const handGroup = new THREE.Group();
   camera.add(handGroup);
   scene.add(camera);
@@ -564,7 +572,7 @@
     handGroup.rotation.y = -swingAngle * 0.5;
   }
 
-  // ---------- Improved Terrain & Biomes & Trees ----------
+  // ---------- Terrain & Biomes & Trees ----------
   const SEA_LEVEL = 0;
 
   function heightAt(x, z) {
@@ -572,24 +580,26 @@
     return Math.floor(h);
   }
 
+  // 풍성한 구형 잎사귀 생성 로직 보정
   function plantTree(tx, ty, tz) {
-    const treeHeight = 4 + Math.floor(hash2(tx, tz) * 2);
+    const treeHeight = 5 + Math.floor(hash2(tx, tz) * 2);
     for (let y = 0; y < treeHeight; y++) {
       addBlock(tx, ty + y, tz, WOOD);
     }
-    const leafStart = ty + treeHeight - 2;
+    const leafTop = ty + treeHeight;
     for (let lx = -2; lx <= 2; lx++) {
       for (let lz = -2; lz <= 2; lz++) {
-        for (let ly = leafStart; ly <= ty + treeHeight + 1; ly++) {
-          if (Math.abs(lx) === 2 && Math.abs(lz) === 2 && ly > leafStart + 1) continue;
-          if (lx === 0 && lz === 0 && ly < ty + treeHeight) continue;
-          addBlock(tx + lx, ly, tz + lz, LEAVES);
+        for (let ly = leafTop - 3; ly <= leafTop + 1; ly++) {
+          const dist = Math.hypot(lx, lz, ly - (leafTop - 1));
+          if (dist <= 2.4 && !(lx === 0 && lz === 0 && ly < leafTop)) {
+            addBlock(tx + lx, ly, tz + lz, LEAVES);
+          }
         }
       }
     }
   }
 
-  const YMIN = -16;
+  const YMIN = 0; // 베드락 최소 높이
   const CHUNK_SIZE = 16;
   const RENDER_DISTANCE = 3;
   const chunks = new Map();
@@ -615,7 +625,10 @@
         const x = cx * CHUNK_SIZE + lx, z = cz * CHUNK_SIZE + lz;
         const h = heightAt(x, z);
 
-        for (let y = YMIN; y <= Math.max(h, SEA_LEVEL); y++) {
+        // Y=0 위치 베드락 생성
+        addBlock(x, 0, z, BEDROCK);
+
+        for (let y = 1; y <= Math.max(h, SEA_LEVEL); y++) {
           const k = key(x, y, z);
           if (chunk.modifications.has(k)) {
             const mod = chunk.modifications.get(k);
@@ -638,7 +651,7 @@
           chunk.blockKeys.add(k);
         }
 
-        // Tree placement logic
+        // 나무 배치
         if (h > SEA_LEVEL + 1 && hash2(x * 1.5, z * 2.3) < 0.02) {
           plantTree(x, h + 1, z);
         }
@@ -661,7 +674,7 @@
 
   // ---------- Player Controller ----------
   const player = {
-    pos: new THREE.Vector3(0.5, heightAt(0, 0) + 5, 0.5),
+    pos: new THREE.Vector3(0.5, Math.max(heightAt(0, 0), SEA_LEVEL) + 5, 0.5),
     velocity: new THREE.Vector3(0, 0, 0),
     onGround: false,
     inWater: false,
@@ -719,7 +732,7 @@
   }
   function buildHotbar() {
     hotbarEl.innerHTML = '';
-    BLOCK_DEFS.forEach((def, i) => {
+    BLOCK_DEFS.slice(0, 9).forEach((def, i) => {
       const slot = document.createElement('div');
       slot.className = 'slot' + (i === 0 ? ' selected' : '');
       slot.innerHTML = `<span class="num">${i + 1}</span><div class="swatch" style="background-image:url(${iconDataURL(def)})"></div><span class="slot-name">${def.name}</span>`;
@@ -730,7 +743,7 @@
   buildHotbar();
 
   function selectSlot(i) {
-    if (i < 0 || i >= BLOCK_DEFS.length) return;
+    if (i < 0 || i >= 9) return;
     selectedSlot = i;
     document.querySelectorAll('.slot').forEach((el, idx) => el.classList.toggle('selected', idx === i));
     updateHeldBlockMaterial(i);
@@ -784,8 +797,9 @@
     if (!hit) return;
     const entry = world.get(key(hit.gx, hit.gy, hit.gz));
     if (entry) {
-      spawnBlockParticles(hit.gx, hit.gy, hit.gz, entry.typeIndex === WATER ? 0x3d7fd9 : BLOCK_DEFS[entry.typeIndex].color);
-      playSound(entry.typeIndex === WATER ? 'water' : 'break');
+      if (entry.typeIndex === BEDROCK) return; // 베드락 파괴 방지
+      spawnBlockParticles(hit.gx, hit.gy, hit.gz, BLOCK_DEFS[entry.typeIndex].color);
+      playSound('break');
     }
     const c = chunkFor(hit.gx, hit.gz);
     c.modifications.set(key(hit.gx, hit.gy, hit.gz), { action: 'remove' });
@@ -868,7 +882,7 @@
     const headInWater = isWaterAt(Math.floor(player.pos.x), Math.floor(player.pos.y), Math.floor(player.pos.z));
     player.inWater = footInWater || headInWater;
 
-    // Visual feedback for underwater
+    // 수중 시야 및 안개 처리 보정
     if (headInWater) {
       waterOverlayEl.style.display = 'block';
       scene.background = waterFogColor;
@@ -878,7 +892,7 @@
       waterOverlayEl.style.display = 'none';
       scene.background = skyColor;
       scene.fog.color = skyColor;
-      scene.fog.density = 0.02;
+      scene.fog.density = 0.015;
     }
 
     if (player.inWater) {
@@ -886,9 +900,9 @@
       player.velocity.z = moveZ * MOVE_SPEED * 0.5;
       
       if (keys['Space']) {
-        player.velocity.y = 4.0; // Swim upward
+        player.velocity.y = 4.0;
       } else {
-        player.velocity.y = -1.5; // Slow sinking
+        player.velocity.y = -1.5;
       }
     } else {
       player.velocity.x = moveX * MOVE_SPEED;
@@ -927,53 +941,67 @@
       stepTimer = 0;
     }
 
-    if (player.pos.y < -60) {
-      player.pos.set(0.5, heightAt(0, 0) + 5, 0.5);
+    // 추락 리스폰 보정
+    if (player.pos.y < -30) {
+      player.pos.set(0.5, Math.max(heightAt(0, 0), SEA_LEVEL) + 5, 0.5);
       player.velocity.set(0, 0, 0);
     }
 
-    camera.position.set(player.pos.x, player.pos.y, player.pos.z);
-    camera.rotation.order = 'YXZ';
-    camera.rotation.y = player.yaw;
-    camera.rotation.x = player.pitch;
-
-    updateHandAnimation(dt, isMoving);
     ensureChunksAroundPlayer(player.pos.x, player.pos.z);
+    updateHandAnimation(dt, isMoving);
+
+    camera.position.copy(player.pos);
+    const target = player.pos.clone().add(new THREE.Vector3(
+      -Math.sin(player.yaw) * Math.cos(player.pitch),
+      Math.sin(player.pitch),
+      -Math.cos(player.yaw) * Math.cos(player.pitch)
+    ));
+    camera.lookAt(target);
+
+    // 햇빛 위치 동적 동기화
+    sun.position.set(player.pos.x + 40, player.pos.y + 60, player.pos.z + 30);
+    sun.target.position.copy(player.pos);
+    sun.target.updateMatrixWorld();
   }
 
-  // ---------- Main Loop ----------
-  const clock = new THREE.Clock();
-  let fpsSmooth = 60;
+  // ---------- HUD & Main Loop ----------
+  let lastTime = performance.now();
   let frameCount = 0;
+  let fpsTimer = 0;
 
-  function animate() {
+  function animate(now) {
     requestAnimationFrame(animate);
-    const dt = Math.min(clock.getDelta(), 0.05);
+    const dt = Math.min((now - lastTime) / 1000, 0.1);
+    lastTime = now;
+
+    frameCount++;
+    fpsTimer += dt;
+    if (fpsTimer >= 1.0) {
+      fpsEl.textContent = frameCount;
+      frameCount = 0;
+      fpsTimer = 0;
+    }
 
     if (started) {
       updatePlayer(dt);
       updateParticles(dt);
       updateOutline();
-    }
 
-    frameCount++;
-    if (dt > 0) fpsSmooth = fpsSmooth * 0.9 + (1 / dt) * 0.1;
-    if (frameCount % 10 === 0) {
-      fpsEl.textContent = Math.round(fpsSmooth);
-      xEl.textContent = player.pos.x.toFixed(1);
-      yEl.textContent = player.pos.y.toFixed(1);
-      zEl.textContent = player.pos.z.toFixed(1);
+      xEl.textContent = Math.floor(player.pos.x);
+      yEl.textContent = Math.floor(player.pos.y);
+      zEl.textContent = Math.floor(player.pos.z);
     }
 
     renderer.render(scene, camera);
   }
-  animate();
 
   window.addEventListener('resize', () => {
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
     renderer.setSize(window.innerWidth, window.innerHeight);
   });
+
+  requestAnimationFrame(animate);
 })();
 </script>
 </body>
