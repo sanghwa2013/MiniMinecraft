@@ -672,10 +672,27 @@ function generateChunk(cx, cz) {
 
   ensureChunksAroundPlayer(0, 0);
 
-  // ---------- Player Controller ----------
-  // 나무 내 스폰을 방지하기 위해 +8 여유를 두고 높은 위치에서 스폰
+  // 🔥 잔디 블록(SEA_LEVEL + 1 보다 높은 지형)을 찾아 위치를 반환하는 함수
+  function getGrassSpawnPos() {
+    for (let radius = 0; radius < 100; radius++) {
+      for (let x = -radius; x <= radius; x++) {
+        for (let z = -radius; z <= radius; z++) {
+          const h = heightAt(x, z);
+          // 해수면보다 높아 잔디 블록이 생성되는 위치 확인
+          if (h > SEA_LEVEL + 1) {
+            ensureChunksAroundPlayer(x, z);
+            return new THREE.Vector3(x + 0.5, h + 1.8, z + 0.5); // 잔디 바로 위에 착지
+          }
+        }
+      }
+    }
+    return new THREE.Vector3(0.5, 10, 0.5);
+  }
+
+  const initialSpawnPos = getGrassSpawnPos();
+
   const player = {
-    pos: new THREE.Vector3(0.5, Math.max(heightAt(0, 0) + 8, SEA_LEVEL + 5), 0.5),
+    pos: initialSpawnPos.clone(), // 🔥 항상 잔디 위에서 스폰!
     velocity: new THREE.Vector3(0, 0, 0),
     onGround: false,
     inWater: false,
@@ -948,9 +965,9 @@ function generateChunk(cx, cz) {
     }
 
     if (player.pos.y < MIN_Y - 10) {
-      player.pos.set(0.5, Math.max(heightAt(0, 0) + 8, SEA_LEVEL + 5), 0.5);
-      player.velocity.set(0, 0, 0);
-    }
+  player.pos.copy(initialSpawnPos); // 🔥 재스폰 시에도 잔디 위로 이동
+  player.velocity.set(0, 0, 0);
+}
 
     ensureChunksAroundPlayer(player.pos.x, player.pos.z);
     updateHandAnimation(dt, isMoving);
