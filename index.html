@@ -611,7 +611,7 @@
     return c;
   }
 
-  function generateChunk(cx, cz) {
+ function generateChunk(cx, cz) {
     const ck = cx + ',' + cz;
     let chunk = chunks.get(ck);
     if (!chunk) { chunk = { modifications: new Map(), blockKeys: new Set(), loaded: false }; chunks.set(ck, chunk); }
@@ -643,8 +643,11 @@
               } else {
                 addBlock(x, y, z, STONE);
               }
-            } else if (y > h && y <= SEA_LEVEL) { // 🔥 y === SEA_LEVEL 대신 y <= SEA_LEVEL 로 수정 (바닥까지 물 채움)
-              addBlock(x, y, z, WATER);
+            } else if (y > h && y <= SEA_LEVEL) {
+              // 🔥 수면 위/상단 2칸(y=0, y=-1)만 물 블록으로 채워서 렌더링 부하 최소화
+              if (y >= SEA_LEVEL - 1) {
+                addBlock(x, y, z, WATER);
+              }
             }
           }
           chunk.blockKeys.add(k);
