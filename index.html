@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>미니 마인크래프트 (Hand & Sound Update)</title>
+<title>미니 마인크래프트 (Geographic & Water Update)</title>
 <style>
   html, body { 
     margin: 0; 
@@ -37,6 +37,15 @@
   }
   #crosshair::before { width: 2px; height: 16px; left: 7px; top: 0; }
   #crosshair::after { width: 16px; height: 2px; top: 7px; left: 0; }
+
+  #water-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(20, 80, 160, 0.45);
+    pointer-events: none;
+    z-index: 5;
+    display: none;
+  }
 
   #hotbar {
     position: fixed; 
@@ -141,6 +150,7 @@
 <body>
 <div id="canvas-container"></div>
 <div id="crosshair"></div>
+<div id="water-overlay"></div>
 <div id="hotbar"></div>
 
 <div id="hud">
@@ -171,6 +181,7 @@
   const container = document.getElementById('canvas-container');
   const blocker = document.getElementById('blocker');
   const crosshairEl = document.getElementById('crosshair');
+  const waterOverlayEl = document.getElementById('water-overlay');
   const fpsEl = document.getElementById('fps-val');
   const xEl = document.getElementById('x-val');
   const yEl = document.getElementById('y-val');
@@ -233,8 +244,10 @@
 
   // ---------- Scene setup ----------
   const scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x7ec0ee);
-  scene.fog = new THREE.FogExp2(0x7ec0ee, 0.02);
+  const skyColor = new THREE.Color(0x7ec0ee);
+  const waterFogColor = new THREE.Color(0x0a3d62);
+  scene.background = skyColor;
+  scene.fog = new THREE.FogExp2(skyColor, 0.02);
 
   const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.05, 1000);
 
@@ -264,6 +277,14 @@
   function hash2(x, z) {
     const s = Math.sin(x * 127.1 + z * 311.7) * 43758.5453123;
     return s - Math.floor(s);
+  }
+
+  // Simple multi-frequency noise for varied landscapes
+  function perlinLike(x, z) {
+    const n1 = Math.sin(x * 0.04) * Math.cos(z * 0.04) * 12;
+    const n2 = Math.sin(x * 0.1 + 1.5) * Math.cos(z * 0.1 + 0.8) * 5;
+    const n3 = Math.sin(x * 0.2) * Math.sin(z * 0.2) * 2;
+    return n1 + n2 + n3;
   }
 
   // ---------- Textures ----------
@@ -370,7 +391,7 @@
   const waterMat = new THREE.MeshLambertMaterial({ 
     map: waterTexture(), 
     transparent: true, 
-    opacity: 0.7, 
+    opacity: 0.65, 
     side: THREE.DoubleSide 
   });
 
@@ -542,26 +563,29 @@
     handGroup.rotation.y = -swingAngle * 0.5;
   }
 
-  // ---------- Terrain & Biomes ----------
-  function biomeAt(x, z) {
-    const n = (Math.sin(x * 0.015 + 12.3) + Math.cos(z * 0.012 - 7.1)) / 2;
-    if (n < -0.2) return 'mountains';
-    if (n < 0.3) return 'plains';
-    return 'desert';
-  }
+  // ---------- Improved Terrain & Biomes & Trees ----------
+  const SEA_LEVEL = 0;
+
   function heightAt(x, z) {
-    const biome = biomeAt(x, z);
-    const rolling = 3 * Math.sin(x * 0.13) + 3 * Math.cos(z * 0.13);
-    if (biome === 'desert') return Math.floor(rolling * 0.4) - 1;
-    if (biome === 'mountains') return Math.floor(rolling * 0.6 + 8 * Math.sin(x * 0.05) + 6);
-    return Math.floor(rolling);
+    const h = perlinLike(x, z);
+    return Math.floor(h);
   }
-  
-  function baseBlockType(y, h, biome) {
-    if (y > h) return WATER;
-    if (biome === 'desert') return y > h - 4 ? SAND : STONE;
-    if (biome === 'mountains') return y === h ? GRASS : (y > h - 3 ? DIRT : STONE);
-    return y === h ? GRASS : (y > h - 3 ? DIRT : STONE);
+
+  function plantTree(tx, ty, tz) {
+    const treeHeight = 4 + Math.floor(hash2(tx, tz) * 2);
+    for (let y = 0; y < treeHeight; y++) {
+      addBlock(tx, ty + y, tz, WOOD);
+    }
+    const leafStart = ty + treeHeight - 2;
+    for (let lx = -2; lx <= 2; lx++) {
+      for (let lz = -2; lz <= 2; lz++) {
+        for (let ly = leafStart; ly <= ty + treeHeight + 1; ly++) {
+          if (Math.abs(lx) === 2 && Math.abs(lz) === 2 && ly > leafStart + 1) continue;
+          if (lx === 0 && lz === 0 && ly < ty + treeHeight) continue;
+          addBlock(tx + lx, ly, tz + lz, LEAVES);
+        }
+      }
+    }
   }
 
   const YMIN = -16;
@@ -588,17 +612,34 @@
     for (let lx = 0; lx < CHUNK_SIZE; lx++) {
       for (let lz = 0; lz < CHUNK_SIZE; lz++) {
         const x = cx * CHUNK_SIZE + lx, z = cz * CHUNK_SIZE + lz;
-        const biome = biomeAt(x, z);
         const h = heightAt(x, z);
-        for (let y = YMIN; y <= Math.max(h, -1); y++) {
+
+        for (let y = YMIN; y <= Math.max(h, SEA_LEVEL); y++) {
           const k = key(x, y, z);
           if (chunk.modifications.has(k)) {
             const mod = chunk.modifications.get(k);
             if (mod.action === 'add') addBlock(x, y, z, mod.typeIndex);
           } else {
-            addBlock(x, y, z, baseBlockType(y, h, biome));
+            if (y > h && y <= SEA_LEVEL) {
+              addBlock(x, y, z, WATER);
+            } else if (y <= h) {
+              if (y === h) {
+                if (h <= SEA_LEVEL + 1) addBlock(x, y, z, SAND);
+                else addBlock(x, y, z, GRASS);
+              } else if (y > h - 3) {
+                if (h <= SEA_LEVEL + 1) addBlock(x, y, z, SAND);
+                else addBlock(x, y, z, DIRT);
+              } else {
+                addBlock(x, y, z, STONE);
+              }
+            }
           }
           chunk.blockKeys.add(k);
+        }
+
+        // Tree placement logic
+        if (h > SEA_LEVEL + 1 && hash2(x * 1.5, z * 2.3) < 0.02) {
+          plantTree(x, h + 1, z);
         }
       }
     }
@@ -619,7 +660,7 @@
 
   // ---------- Player Controller ----------
   const player = {
-    pos: new THREE.Vector3(0.5, heightAt(0, 0) + 3, 0.5),
+    pos: new THREE.Vector3(0.5, heightAt(0, 0) + 5, 0.5),
     velocity: new THREE.Vector3(0, 0, 0),
     onGround: false,
     inWater: false,
@@ -796,8 +837,6 @@
   const GRAVITY = -26;
   const JUMP_SPEED = 8.5;
   const MOVE_SPEED = 5.5;
-  const WATER_GRAVITY = -9;
-  const WATER_VELOCITY_CAP = 0.35;
   let stepTimer = 0;
 
   function collidesPlayer(pos) {
@@ -824,17 +863,32 @@
     const isMoving = len > 0;
     if (isMoving) { moveX /= len; moveZ /= len; }
 
-    player.inWater = isWaterAt(Math.floor(player.pos.x), Math.floor(player.pos.y), Math.floor(player.pos.z));
+    const footInWater = isWaterAt(Math.floor(player.pos.x), Math.floor(player.pos.y - 1), Math.floor(player.pos.z));
+    const headInWater = isWaterAt(Math.floor(player.pos.x), Math.floor(player.pos.y), Math.floor(player.pos.z));
+    player.inWater = footInWater || headInWater;
+
+    // Visual feedback for underwater
+    if (headInWater) {
+      waterOverlayEl.style.display = 'block';
+      scene.background = waterFogColor;
+      scene.fog.color = waterFogColor;
+      scene.fog.density = 0.12;
+    } else {
+      waterOverlayEl.style.display = 'none';
+      scene.background = skyColor;
+      scene.fog.color = skyColor;
+      scene.fog.density = 0.02;
+    }
 
     if (player.inWater) {
-      player.velocity.x = moveX * MOVE_SPEED * 0.6;
-      player.velocity.z = moveZ * MOVE_SPEED * 0.6;
+      player.velocity.x = moveX * MOVE_SPEED * 0.5;
+      player.velocity.z = moveZ * MOVE_SPEED * 0.5;
       
       if (keys['Space']) {
-        player.velocity.y = Math.min(player.velocity.y + 8 * dt, WATER_VELOCITY_CAP);
+        player.velocity.y = 4.0; // Swim upward
+      } else {
+        player.velocity.y = -1.5; // Slow sinking
       }
-      player.velocity.y += WATER_GRAVITY * dt;
-      player.velocity.y = Math.max(player.velocity.y, WATER_VELOCITY_CAP * -1);
     } else {
       player.velocity.x = moveX * MOVE_SPEED;
       player.velocity.z = moveZ * MOVE_SPEED;
@@ -873,7 +927,7 @@
     }
 
     if (player.pos.y < -60) {
-      player.pos.set(0.5, heightAt(0, 0) + 3, 0.5);
+      player.pos.set(0.5, heightAt(0, 0) + 5, 0.5);
       player.velocity.set(0, 0, 0);
     }
 
