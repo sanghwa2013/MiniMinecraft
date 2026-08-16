@@ -576,10 +576,10 @@
   const SEA_LEVEL = 0;
   const MIN_Y = -12; // 최하단 깊이 제한 설정
 
-  function heightAt(x, z) {
-    const h = perlinLike(x, z);
-    return Math.floor(h);
-  }
+function heightAt(x, z) {
+  const h = perlinLike(x, z);
+  return Math.floor(h + 5); // 🔥 +5 오프셋 추가! 전체 지형을 올리고 물 영역을 대폭 축소
+}
 
   function plantTree(tx, ty, tz) {
     const treeHeight = 5 + Math.floor(hash2(tx, tz) * 2);
@@ -611,7 +611,7 @@
     return c;
   }
 
- function generateChunk(cx, cz) {
+function generateChunk(cx, cz) {
     const ck = cx + ',' + cz;
     let chunk = chunks.get(ck);
     if (!chunk) { chunk = { modifications: new Map(), blockKeys: new Set(), loaded: false }; chunks.set(ck, chunk); }
@@ -634,6 +634,7 @@
             if (y === MIN_Y) {
               addBlock(x, y, z, BEDROCK);
             } else if (y <= h) {
+              // 지형 생성 (모래/흙/돌)
               if (y === h) {
                 if (h <= SEA_LEVEL + 1) addBlock(x, y, z, SAND);
                 else addBlock(x, y, z, GRASS);
@@ -644,10 +645,8 @@
                 addBlock(x, y, z, STONE);
               }
             } else if (y > h && y <= SEA_LEVEL) {
-              // 🔥 수면 위/상단 2칸(y=0, y=-1)만 물 블록으로 채워서 렌더링 부하 최소화
-              if (y >= SEA_LEVEL - 1) {
-                addBlock(x, y, z, WATER);
-              }
+              // 지형 표면(h)부터 해수면(y=0)까지 공기층 없이 꽉 채움
+              addBlock(x, y, z, WATER);
             }
           }
           chunk.blockKeys.add(k);
