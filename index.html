@@ -821,69 +821,71 @@
     return entry && entry.typeIndex !== WATER;
   }
 
-  function getTargetedBlock() {
-    const dir = new THREE.Vector3();
-    camera.getWorldDirection(dir);
-    const origin = camera.position;
+function getTargetedBlock() {
+  const dir = new THREE.Vector3();
+  camera.getWorldDirection(dir);
+  const origin = camera.position;
 
-    let x = Math.floor(origin.x), y = Math.floor(origin.y), z = Math.floor(origin.z);
-    const stepX = dir.x > 0 ? 1 : -1, stepY = dir.y > 0 ? 1 : -1, stepZ = dir.z > 0 ? 1 : -1;
-    const deltaX = Math.abs(1 / (dir.x || 1e-8)), deltaY = Math.abs(1 / (dir.y || 1e-8)), deltaZ = Math.abs(1 / (dir.z || 1e-8));
+  let x = Math.floor(origin.x), y = Math.floor(origin.y), z = Math.floor(origin.z);
+  const stepX = dir.x > 0 ? 1 : -1, stepY = dir.y > 0 ? 1 : -1, stepZ = dir.z > 0 ? 1 : -1;
+  const deltaX = Math.abs(1 / (dir.x || 1e-8)), deltaY = Math.abs(1 / (dir.y || 1e-8)), deltaZ = Math.abs(1 / (dir.z || 1e-8));
 
-    let maxX = dir.x > 0 ? (x + 1 - origin.x) * deltaX : (origin.x - x) * deltaX;
-    let maxY = dir.y > 0 ? (y + 1 - origin.y) * deltaY : (origin.y - y) * deltaY;
-    let maxZ = dir.z > 0 ? (z + 1 - origin.z) * deltaZ : (origin.z - z) * deltaZ;
+  let maxX = dir.x > 0 ? (x + 1 - origin.x) * deltaX : (origin.x - x) * deltaX;
+  let maxY = dir.y > 0 ? (y + 1 - origin.y) * deltaY : (origin.y - y) * deltaY;
+  let maxZ = dir.z > 0 ? (z + 1 - origin.z) * deltaZ : (origin.z - z) * deltaZ;
 
-    let normX = 0, normY = 0, normZ = 0;
-    let dist = 0;
+  let normX = 0, normY = 0, normZ = 0;
+  let dist = 0;
 
-    while (dist < 7) {
-      if (isSolidAt(x, y, z)) {
-        return { gx: x, gy: y, gz: z, px: x - normX, py: y - normY, pz: z - normZ };
-      }
-      if (maxX < maxY) {
-        if (maxX < maxZ) { dist = maxX; maxX += deltaX; x += stepX; normX = stepX; normY = 0; normZ = 0; }
-        else { dist = maxZ; maxZ += deltaZ; z += stepZ; normX = 0; normY = 0; normZ = stepZ; }
-      } else {
-        if (maxY < maxZ) { dist = maxY; maxY += deltaY; y += stepY; normX = 0; normY = stepY; normZ = 0; }
-        else { dist = maxZ; maxZ += deltaZ; z += stepZ; normX = 0; normY = 0; normZ = stepZ; }
-      }
-    }
-    return null;
-  }
+  while (dist < 7) {
+    const k = key(x, y, z);
+    const entry = world.get(k);
 
-  function breakTargetedBlock() {
-    triggerSwing();
-    const hit = getTargetedBlock();
-    if (!hit) return;
-    const entry = world.get(key(hit.gx, hit.gy, hit.gz));
+    // 단단한 블록이거나, 물 블록인 경우 모두 타겟으로 잡음
     if (entry) {
-      if (entry.typeIndex === BEDROCK) return;
-      spawnBlockParticles(hit.gx, hit.gy, hit.gz, BLOCK_DEFS[entry.typeIndex].color);
-      playSound('break');
+      return { gx: x, gy: y, gz: z, px: x - normX, py: y - normY, pz: z - normZ, typeIndex: entry.typeIndex };
     }
-    const c = chunkFor(hit.gx, hit.gz);
-    c.modifications.set(key(hit.gx, hit.gy, hit.gz), { action: 'remove' });
-    removeBlockAt(hit.gx, hit.gy, hit.gz);
+
+    if (maxX < maxY) {
+      if (maxX < maxZ) { dist = maxX; maxX += deltaX; x += stepX; normX = stepX; normY = 0; normZ = 0; }
+      else { dist = maxZ; maxZ += deltaZ; z += stepZ; normX = 0; normY = 0; normZ = stepZ; }
+    } else {
+      if (maxY < maxZ) { dist = maxY; maxY += deltaY; y += stepY; normX = 0; normY = stepY; normZ = 0; }
+      else { dist = maxZ; maxZ += deltaZ; z += stepZ; normX = 0; normY = 0; normZ = stepZ; }
+    }
+  }
+  return null;
+}
+
+ function breakTargetedBlock() {
+  triggerSwing();
+  const hit = getTargetedBlock();
+  if (!hit) return;
+
+  // 물 자체를 파괴하려고 하면 무시
+  if (hit.typeIndex === WATER) return;
+
+  const entry = world.get(key(hit.gx, hit.gy, hit.gz));
+  if (entry) {
+    if (entry.typeIndex === BEDROCK) return;
+    spawnBlockParticles(hit.gx, hit.gy, hit.gz, BLOCK_DEFS[entry.typeIndex].color);
+    playSound('break');
   }
 
-  function placeTargetedBlock() {
-    triggerSwing();
-    const hit = getTargetedBlock();
-    if (!hit) return;
-    const nx = hit.px, ny = hit.py, nz = hit.pz;
+  const k = key(hit.gx, hit.gy, hit.gz);
+  const c = chunkFor(hit.gx, hit.gz);
+  
+  // 먼저 기존 일반 블록을 제거
+  removeBlockAt(hit.gx, hit.gy, hit.gz);
 
-    const pMinX = player.pos.x - player.radius, pMaxX = player.pos.x + player.radius;
-    const pMinZ = player.pos.z - player.radius, pMaxZ = player.pos.z + player.radius;
-    const pMinY = player.pos.y - player.height, pMaxY = player.pos.y;
-
-    if (pMinX < nx + 1 && pMaxX > nx && pMinY < ny + 1 && pMaxY > ny && pMinZ < nz + 1 && pMaxZ > nz) return;
-
-    const c = chunkFor(nx, nz);
-    c.modifications.set(key(nx, ny, nz), { action: 'add', typeIndex: selectedSlot });
-    addBlock(nx, ny, nz, selectedSlot);
-    playSound('place');
+  // 부순 위치가 해수면(SEA_LEVEL) 이하인 경우 즉시 물로 다시 채움
+  if (hit.gy <= SEA_LEVEL) {
+    c.modifications.set(k, { action: 'add', typeIndex: WATER });
+    addBlock(hit.gx, hit.gy, hit.gz, WATER);
+  } else {
+    c.modifications.set(k, { action: 'remove' });
   }
+}
 
   renderer.domElement.addEventListener('mousedown', (e) => {
     if (!started) return;
@@ -908,6 +910,38 @@
       outline.visible = false;
     }
   }
+
+  function placeTargetedBlock() {
+  triggerSwing();
+  const hit = getTargetedBlock();
+  if (!hit) return;
+
+  let nx = hit.px, ny = hit.py, nz = hit.pz;
+
+  // 만약 클릭한 블록 자체가 '물'인 경우, 물이 있는 바로 그 자리에 블록을 덮어써서 설치
+  if (hit.typeIndex === WATER) {
+    nx = hit.gx;
+    ny = hit.gy;
+    nz = hit.gz;
+  }
+
+  // 플레이어 몸과 겹치는지 체크
+  const pMinX = player.pos.x - player.radius, pMaxX = player.pos.x + player.radius;
+  const pMinZ = player.pos.z - player.radius, pMaxZ = player.pos.z + player.radius;
+  const pMinY = player.pos.y - player.height, pMaxY = player.pos.y;
+
+  if (pMinX < nx + 1 && pMaxX > nx && pMinY < ny + 1 && pMaxY > ny && pMinZ < nz + 1 && pMaxZ > nz) return;
+
+  // 이미 물이 있는 칸이라면 기존 물을 지우고 새 블록 설치
+  if (world.has(key(nx, ny, nz))) {
+    removeBlockAt(nx, ny, nz);
+  }
+
+  const c = chunkFor(nx, nz);
+  c.modifications.set(key(nx, ny, nz), { action: 'add', typeIndex: selectedSlot });
+  addBlock(nx, ny, nz, selectedSlot);
+  playSound('place');
+}
 
   // ---------- Water Flow Algorithm (유체 확산) ----------
   let waterUpdateTimer = 0;
