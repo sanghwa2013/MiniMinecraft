@@ -41,12 +41,12 @@
   #water-overlay {
     position: fixed;
     inset: 0;
-    background: rgba(20, 80, 160, 0.45);
+    background: rgba(20, 80, 160, 0.35);
     backdrop-filter: blur(1px);
     pointer-events: none;
     z-index: 5;
     opacity: 0;
-    transition: opacity 0.2s ease-in-out;
+    transition: opacity 0.25s ease-in-out;
   }
   #water-overlay.active {
     opacity: 1;
@@ -251,8 +251,8 @@
   const skyColor = new THREE.Color(0x7ec0ee);
   const waterFogColor = new THREE.Color(0x1e537d);
   
-  scene.background = skyColor.clone();
-  scene.fog = new THREE.Fog(skyColor.clone(), 24, 56);
+  scene.background = skyColor;
+  scene.fog = new THREE.Fog(skyColor, 24, 56);
 
   const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.05, 1000);
 
@@ -380,6 +380,8 @@
 
   // ---------- Block Definitions ----------
   const boxGeo = new THREE.BoxGeometry(1, 1, 1);
+  
+  // 마인크래프트 높이 규격 (y + 0.85) 적용
   const waterPlaneGeo = new THREE.PlaneGeometry(1, 1);
   waterPlaneGeo.rotateX(-Math.PI / 2);
 
@@ -423,7 +425,7 @@
     { name: '유리', material: glassMat, color: 0xbfe8ff },
     { name: '기반암', material: bedrockMat, color: 0x333333 }
   ];
-  const CAPACITY = [40000, 50000, 80000, 20000, 30000, 40000, 20000, 20000, 20000, 40000, 30000];
+  const CAPACITY = [20000, 30000, 50000, 10000, 15000, 20000, 10000, 10000, 10000, 20000, 15000];
   const GRASS = 0, DIRT = 1, STONE = 2, WOOD = 3, LEAVES = 4, SAND = 5, GRAVEL = 6, BRICK = 7, GLASS = 8, BEDROCK = 9, WATER = 10;
 
   // ---------- Instanced Meshes ----------
@@ -453,6 +455,7 @@
     if (layer.count >= layer.capacity) return;
     const idx = layer.count;
     
+    // 수면 높이를 마인크래프트 해수면 높이(0.85)로 배치해 경계 정돈
     if (typeIndex === WATER) {
       tmpMat.makeTranslation(x + 0.5, y + 0.85, z + 0.5);
     } else {
@@ -527,7 +530,7 @@
     }
   }
 
-  // ---------- 손 애니메이션 & Held Block ----------
+  // ---------- 1인칭 손 & 들고 있는 블록 ----------
   const handGroup = new THREE.Group();
   camera.add(handGroup);
   scene.add(camera);
@@ -546,11 +549,6 @@
 
   function updateHeldBlockMaterial(typeIndex) {
     heldBlockMesh.material = BLOCK_DEFS[typeIndex].material;
-    if (typeIndex === GLASS) {
-      handMesh.visible = false;
-    } else {
-      handMesh.visible = true;
-    }
   }
 
   let swingTime = 0;
@@ -569,24 +567,20 @@
       bobY = Math.abs(Math.cos(time)) * 0.03;
     }
 
-    let swingProgress = 0;
+    let swingAngle = 0;
     if (isSwinging) {
-      swingTime += dt * 18;
+      swingTime += dt * 15;
       if (swingTime >= Math.PI) {
         swingTime = 0;
         isSwinging = false;
       } else {
-        swingProgress = Math.sin(swingTime);
+        swingAngle = Math.sin(swingTime) * 0.8;
       }
     }
 
-    handGroup.position.set(
-      bobX, 
-      bobY + swingProgress * 0.15, 
-      -swingProgress * 0.2
-    );
-    handGroup.rotation.x = -swingProgress * 1.1; 
-    handGroup.rotation.y = swingProgress * 0.3;
+    handGroup.position.set(bobX, bobY - swingAngle * 0.1, swingAngle * 0.1);
+    handGroup.rotation.x = swingAngle;
+    handGroup.rotation.y = -swingAngle * 0.5;
   }
 
   // ---------- Terrain & Biomes & Trees ----------
@@ -617,7 +611,7 @@
   }
 
   const CHUNK_SIZE = 16;
-  const RENDER_DISTANCE = 3;
+  const RENDER_DISTANCE = 2;
   const chunks = new Map();
 
   function chunkFor(x, z) {
@@ -628,45 +622,43 @@
     return c;
   }
 
-function generateChunk(chunkX, chunkZ) {
-  const chunkKey = `${chunkX},${chunkZ}`;
-  // ... (기존 청크 설정)
+  function generateChunk(cx, cz) {
+    const ck = cx + ',' + cz;
+    let chunk = chunks.get(ck);
+    if (!chunk) { chunk = { modifications: new Map(), loaded: false }; chunks.set(ck, chunk); }
+    if (chunk.loaded) return;
+    chunk.loaded = true;
 
-  for (let x = 0; x < CHUNK_SIZE; x++) {
-    for (let z = 0; z < CHUNK_SIZE; z++) {
-      const worldX = chunkX * CHUNK_SIZE + x;
-      const worldZ = chunkZ * CHUNK_SIZE + z;
+    for (let lx = 0; lx < CHUNK_SIZE; lx++) {
+      for (let lz = 0; lz < CHUNK_SIZE; lz++) {
+        const x = cx * CHUNK_SIZE + lx, z = cz * CHUNK_SIZE + lz;
+        const h = heightAt(x, z);
+        const maxY = Math.max(h, SEA_LEVEL);
 
-      // 노이즈 기반 표면 높이 계산 (예시)
-      const surfaceY = getSurfaceHeight(worldX, worldZ); 
+        for (let y = MIN_Y; y <= maxY; y++) {
+          const k = key(x, y, z);
 
-      // 1. 맨 바닥: 베드락 (Y = 0)
-      addBlockToWorld(worldX, 0, worldZ, BEDROCK);
+          if (chunk.modifications.has(k)) {
+            const mod = chunk.modifications.get(k);
+            if (mod.action === 'add') addBlock(x, y, z, mod.typeIndex);
+          } else {
+            if (y < h - 1 && y > MIN_Y + 1) continue;
 
-      // 2. 바닥 위부터 표면 바로 밑까지: 빠짐없이 '돌(STONE)'로 채우기
-      for (let y = 1; y < surfaceY - 3; y++) {
-        addBlockToWorld(worldX, y, worldZ, STONE);
-      }
-
-      // 3. 표면 근처: 흙(DIRT) 레이어 (약 3칸)
-      for (let y = Math.max(1, surfaceY - 3); y < surfaceY; y++) {
-        addBlockToWorld(worldX, y, worldZ, DIRT);
-      }
-
-      // 4. 맨 위 표면: 잔디(GRASS) 또는 해수면 이하일 경우 처리
-      if (surfaceY <= SEA_LEVEL) {
-        addBlockToWorld(worldX, surfaceY, worldZ, DIRT);
-        
-        // 해수면까지 '물(WATER)' 채우기
-        for (let wy = surfaceY + 1; wy <= SEA_LEVEL; wy++) {
-          addBlockToWorld(worldX, wy, worldZ, WATER);
+            if (y === MIN_Y) {
+              addBlock(x, y, z, BEDROCK);
+            } else if (y <= h) {
+              if (y === h) {
+                if (h <= SEA_LEVEL + 1) addBlock(x, y, z, SAND);
+                else addBlock(x, y, z, GRASS);
+              } else if (y > h - 3) {
+                if (h <= SEA_LEVEL + 1) addBlock(x, y, z, SAND);
+                else addBlock(x, y, z, DIRT);
+              } else {
+                addBlock(x, y, z, STONE);
+              }
+            } 
+          }
         }
-      } else {
-        addBlockToWorld(worldX, surfaceY, worldZ, GRASS);
-      }
-    }
-  }
-}
 
         if (h < SEA_LEVEL) {
           addBlock(x, SEA_LEVEL, z, WATER);
@@ -688,7 +680,9 @@ function generateChunk(chunkX, chunkZ) {
       for (let lz = 0; lz < CHUNK_SIZE; lz++) {
         const x = cx * CHUNK_SIZE + lx;
         const z = cz * CHUNK_SIZE + lz;
-        for (let y = MIN_Y; y <= 35; y++) {
+        const h = heightAt(x, z);
+        const maxY = Math.max(h, SEA_LEVEL) + 10;
+        for (let y = MIN_Y; y <= maxY; y++) {
           removeBlockAt(x, y, z);
         }
       }
@@ -825,78 +819,77 @@ function generateChunk(chunkX, chunkZ) {
     return entry && entry.typeIndex !== WATER;
   }
 
-// ignoreWater가 true이면 물을 무시하고 물속의 단단한 블록을 타겟팅함
-function getTargetedBlock(ignoreWater = true) {
-  const dir = new THREE.Vector3();
-  camera.getWorldDirection(dir);
-  const origin = camera.position;
+  function getTargetedBlock() {
+    const dir = new THREE.Vector3();
+    camera.getWorldDirection(dir);
+    const origin = camera.position;
 
-  let x = Math.floor(origin.x), y = Math.floor(origin.y), z = Math.floor(origin.z);
-  const stepX = dir.x > 0 ? 1 : -1, stepY = dir.y > 0 ? 1 : -1, stepZ = dir.z > 0 ? 1 : -1;
-  const deltaX = Math.abs(1 / (dir.x || 1e-8)), deltaY = Math.abs(1 / (dir.y || 1e-8)), deltaZ = Math.abs(1 / (dir.z || 1e-8));
+    let x = Math.floor(origin.x), y = Math.floor(origin.y), z = Math.floor(origin.z);
+    const stepX = dir.x > 0 ? 1 : -1, stepY = dir.y > 0 ? 1 : -1, stepZ = dir.z > 0 ? 1 : -1;
+    const deltaX = Math.abs(1 / (dir.x || 1e-8)), deltaY = Math.abs(1 / (dir.y || 1e-8)), deltaZ = Math.abs(1 / (dir.z || 1e-8));
 
-  let maxX = dir.x > 0 ? (x + 1 - origin.x) * deltaX : (origin.x - x) * deltaX;
-  let maxY = dir.y > 0 ? (y + 1 - origin.y) * deltaY : (origin.y - y) * deltaY;
-  let maxZ = dir.z > 0 ? (z + 1 - origin.z) * deltaZ : (origin.z - z) * deltaZ;
+    let maxX = dir.x > 0 ? (x + 1 - origin.x) * deltaX : (origin.x - x) * deltaX;
+    let maxY = dir.y > 0 ? (y + 1 - origin.y) * deltaY : (origin.y - y) * deltaY;
+    let maxZ = dir.z > 0 ? (z + 1 - origin.z) * deltaZ : (origin.z - z) * deltaZ;
 
-  let normX = 0, normY = 0, normZ = 0;
-  let dist = 0;
+    let normX = 0, normY = 0, normZ = 0;
+    let dist = 0;
 
-  while (dist < 7) {
-    const k = key(x, y, z);
-    const entry = world.get(k);
-
-    if (entry) {
-      // 물 관통 설정 시 물 블록은 지나침
-      if (ignoreWater && entry.typeIndex === WATER) {
-        // 계속 통과
+    while (dist < 7) {
+      if (isSolidAt(x, y, z)) {
+        return { gx: x, gy: y, gz: z, px: x - normX, py: y - normY, pz: z - normZ };
+      }
+      if (maxX < maxY) {
+        if (maxX < maxZ) { dist = maxX; maxX += deltaX; x += stepX; normX = stepX; normY = 0; normZ = 0; }
+        else { dist = maxZ; maxZ += deltaZ; z += stepZ; normX = 0; normY = 0; normZ = stepZ; }
       } else {
-        return { gx: x, gy: y, gz: z, px: x - normX, py: y - normY, pz: z - normZ, typeIndex: entry.typeIndex };
+        if (maxY < maxZ) { dist = maxY; maxY += deltaY; y += stepY; normX = 0; normY = stepY; normZ = 0; }
+        else { dist = maxZ; maxZ += deltaZ; z += stepZ; normX = 0; normY = 0; normZ = stepZ; }
       }
     }
+    return null;
+  }
 
-    if (maxX < maxY) {
-      if (maxX < maxZ) { dist = maxX; maxX += deltaX; x += stepX; normX = stepX; normY = 0; normZ = 0; }
-      else { dist = maxZ; maxZ += deltaZ; z += stepZ; normX = 0; normY = 0; normZ = stepZ; }
-    } else {
-      if (maxY < maxZ) { dist = maxY; maxY += deltaY; y += stepY; normX = 0; normY = stepY; normZ = 0; }
-      else { dist = maxZ; maxZ += deltaZ; z += stepZ; normX = 0; normY = 0; normZ = stepZ; }
+  function breakTargetedBlock() {
+    triggerSwing();
+    const hit = getTargetedBlock();
+    if (!hit) return;
+    const entry = world.get(key(hit.gx, hit.gy, hit.gz));
+    if (entry) {
+      if (entry.typeIndex === BEDROCK) return;
+      spawnBlockParticles(hit.gx, hit.gy, hit.gz, BLOCK_DEFS[entry.typeIndex].color);
+      playSound('break');
     }
+    const c = chunkFor(hit.gx, hit.gz);
+    c.modifications.set(key(hit.gx, hit.gy, hit.gz), { action: 'remove' });
+    removeBlockAt(hit.gx, hit.gy, hit.gz);
   }
-  return null;
-}
-  
-function breakTargetedBlock() {
-  triggerSwing();
-  const hit = getTargetedBlock(true); // 물을 관통하여 내부 블록 조준
-  if (!hit) return;
 
-  const k = key(hit.gx, hit.gy, hit.gz);
-  const entry = world.get(k);
-  if (!entry || entry.typeIndex === BEDROCK) return;
+  function placeTargetedBlock() {
+    triggerSwing();
+    const hit = getTargetedBlock();
+    if (!hit) return;
+    const nx = hit.px, ny = hit.py, nz = hit.pz;
 
-  spawnBlockParticles(hit.gx, hit.gy, hit.gz, BLOCK_DEFS[entry.typeIndex].color);
-  playSound('break');
+    const pMinX = player.pos.x - player.radius, pMaxX = player.pos.x + player.radius;
+    const pMinZ = player.pos.z - player.radius, pMaxZ = player.pos.z + player.radius;
+    const pMinY = player.pos.y - player.height, pMaxY = player.pos.y;
 
-  // 부수려는 칸의 6방향 이웃에 물이 존재하는지 확인
-  const neighbors = [
-    key(hit.gx + 1, hit.gy, hit.gz), key(hit.gx - 1, hit.gy, hit.gz),
-    key(hit.gx, hit.gy + 1, hit.gz), key(hit.gx, hit.gy - 1, hit.gz),
-    key(hit.gx, hit.gy, hit.gz + 1), key(hit.gx, hit.gy, hit.gz - 1)
-  ];
-  const isAdjacentToWater = neighbors.some(nk => world.get(nk)?.typeIndex === WATER);
+    if (pMinX < nx + 1 && pMaxX > nx && pMinY < ny + 1 && pMaxY > ny && pMinZ < nz + 1 && pMaxZ > nz) return;
 
-  const c = chunkFor(hit.gx, hit.gz);
-  removeBlockAt(hit.gx, hit.gy, hit.gz);
-
-  // 이웃에 물이 닿아있는 '딱 그 한 칸'만 물로 채움 (확산 함수 호출 안 함)
-  if (isAdjacentToWater) {
-    c.modifications.set(k, { action: 'add', typeIndex: WATER });
-    addBlock(hit.gx, hit.gy, hit.gz, WATER);
-  } else {
-    c.modifications.set(k, { action: 'remove' });
+    const c = chunkFor(nx, nz);
+    c.modifications.set(key(nx, ny, nz), { action: 'add', typeIndex: selectedSlot });
+    addBlock(nx, ny, nz, selectedSlot);
+    playSound('place');
   }
-}
+
+  renderer.domElement.addEventListener('mousedown', (e) => {
+    if (!started) return;
+    if (e.button === 0) breakTargetedBlock();
+    else if (e.button === 2) placeTargetedBlock();
+  });
+  renderer.domElement.addEventListener('contextmenu', (e) => e.preventDefault());
+
   // ---------- Outline ----------
   const outlineGeo = new THREE.EdgesGeometry(new THREE.BoxGeometry(1.005, 1.005, 1.005));
   const outlineMat = new THREE.LineBasicMaterial({ color: 0x000000, linewidth: 2 });
@@ -913,95 +906,6 @@ function breakTargetedBlock() {
       outline.visible = false;
     }
   }
-
-function placeTargetedBlock() {
-  triggerSwing();
-  const hit = getTargetedBlock(true);
-  if (!hit) return;
-
-  const nx = hit.px, ny = hit.py, nz = hit.pz;
-
-  // 플레이어 몸과 겹침 방지
-  const pMinX = player.pos.x - player.radius, pMaxX = player.pos.x + player.radius;
-  const pMinZ = player.pos.z - player.radius, pMaxZ = player.pos.z + player.radius;
-  const pMinY = player.pos.y - player.height, pMaxY = player.pos.y;
-
-  if (pMinX < nx + 1 && pMaxX > nx && pMinY < ny + 1 && pMaxY > ny && pMinZ < nz + 1 && pMaxZ > nz) return;
-
-  const targetKey = key(nx, ny, nz);
-  
-  // 설치하려는 위치에 물이 있으면 기존 물을 지우고 덮어씀
-  if (world.has(targetKey)) {
-    removeBlockAt(nx, ny, nz);
-  }
-
-  const c = chunkFor(nx, nz);
-  c.modifications.set(targetKey, { action: 'add', typeIndex: selectedSlot });
-  addBlock(nx, ny, nz, selectedSlot);
-  playSound('place');
-}
-
-  // ---------- Water Flow Algorithm (유체 확산) ----------
-  let waterUpdateTimer = 0;
-  const WATER_UPDATE_INTERVAL = 0.2; // 0.2초마다 물 확산 처리
-
-  function updateWaterFlow() {
-  const waterKeys = [];
-  for (const [k, entry] of world.entries()) {
-    if (entry.typeIndex === WATER) {
-      waterKeys.push(k);
-    }
-  }
-
-  for (const k of waterKeys) {
-    const [x, y, z] = k.split(',').map(Number);
-
-    // 플레이어 주변 30블록 이내만 연산 (성능 최적화)
-    if (Math.hypot(x - player.pos.x, z - player.pos.z) > 30) continue;
-
-    const neighbors = [
-      { x: x, y: y - 1, z: z }, // 아래쪽 우선
-      { x: x + 1, y: y, z: z },
-      { x: x - 1, y: y, z: z },
-      { x: x, y: y, z: z + 1 },
-      { x: x, y: y, z: z - 1 }
-    ];
-
-    for (const n of neighbors) {
-      if (n.y <= SEA_LEVEL && n.y >= MIN_Y) {
-        const neighborKey = key(n.x, n.y, n.z);
-
-        // ★ 핵심: world에 아무런 블록도 없는 '완전한 빈 공간'일 때만 물 설치
-        if (!world.has(neighborKey)) {
-          const c = chunkFor(n.x, n.z);
-          c.modifications.set(neighborKey, { action: 'add', typeIndex: WATER });
-          addBlock(n.x, n.y, n.z, WATER);
-        }
-      }
-    }
-  }
-}
-
-// 물 Material 설정 (깨끗한 그래픽 처리)
-const waterMaterial = new THREE.MeshStandardMaterial({
-  color: 0x3399ff,
-  transparent: true,
-  opacity: 0.5,
-  depthWrite: false,
-  side: THREE.DoubleSide
-});
-
-// 윤곽선 업데이트 부분 (물 블록 조준 시 검정 선 완전히 숨김)
-function updateSelectionBox() {
-  const hit = getTargetedBlock(true);
-  
-  if (hit && hit.typeIndex !== WATER) {
-    selectionMesh.position.set(hit.gx + 0.5, hit.gy + 0.5, hit.gz + 0.5);
-    selectionMesh.visible = true;
-  } else {
-    selectionMesh.visible = false;
-  }
-}
 
   // ---------- Physics & Movement ----------
   const GRAVITY = -26;
@@ -1034,47 +938,38 @@ function updateSelectionBox() {
     const isMoving = len > 0;
     if (isMoving) { moveX /= len; moveZ /= len; }
 
-    const eyeY = player.pos.y;
-    const playerBlockX = Math.floor(player.pos.x);
-    const playerBlockZ = Math.floor(player.pos.z);
-    const hAtPos = heightAt(playerBlockX, playerBlockZ);
+    const headInWater = player.pos.y <= SEA_LEVEL + 0.1 && heightAt(Math.floor(player.pos.x), Math.floor(player.pos.z)) < SEA_LEVEL;
+    player.inWater = headInWater;
 
-    const isHeadInWater = (eyeY <= SEA_LEVEL + 0.85) && (hAtPos < SEA_LEVEL);
-    player.inWater = isHeadInWater;
-
+    // 수중 진입/이탈 시 음향 및 부드러운 오버레이 처리
     if (player.inWater !== wasInWater) {
       playSound('splash');
       wasInWater = player.inWater;
     }
 
-    if (isHeadInWater) {
+    if (headInWater) {
+      waterMesh.visible = false;
       waterOverlayEl.classList.add('active');
       scene.background.lerp(waterFogColor, 0.2);
       scene.fog.color.lerp(waterFogColor, 0.2);
       scene.fog.near = 1;
       scene.fog.far = 18;
     } else {
+      waterMesh.visible = true;
       waterOverlayEl.classList.remove('active');
-      scene.background.copy(skyColor);
-      scene.fog.color.copy(skyColor);
+      scene.background.lerp(skyColor, 0.2);
+      scene.fog.color.lerp(skyColor, 0.2);
       scene.fog.near = 24;
       scene.fog.far = 56;
     }
 
-    // 개선된 수중 점프 및 이동 물리
     if (player.inWater) {
-      player.velocity.x = moveX * MOVE_SPEED * 0.85;
-      player.velocity.z = moveZ * MOVE_SPEED * 0.85;
-      
+      player.velocity.x = moveX * MOVE_SPEED * 0.7;
+      player.velocity.z = moveZ * MOVE_SPEED * 0.7;
       if (keys['Space']) {
-        // 수면 부근에서 점프 시 더 강한 추진력을 줘서 블록 위로 안착하도록 수정
-        if (player.pos.y >= SEA_LEVEL - 0.5) {
-          player.velocity.y = 8.5; 
-        } else {
-          player.velocity.y = 6.5; 
-        }
+        player.velocity.y = 5.5;
       } else {
-        player.velocity.y = -1.0;
+        player.velocity.y = -1.2;
       }
     } else {
       player.velocity.x = moveX * MOVE_SPEED;
@@ -1142,15 +1037,9 @@ function updateSelectionBox() {
     const dt = Math.min((now - lastTime) / 1000, 0.1);
     lastTime = now;
 
+    // 수면 오프셋 이동으로 잔잔한 물결 애니메이션 구현
     waterTex.offset.x += dt * 0.04;
     waterTex.offset.y += dt * 0.02;
-
-    // 물 흐름 업데이트 타이머
-    waterUpdateTimer += dt;
-    if (waterUpdateTimer >= WATER_UPDATE_INTERVAL) {
-      updateWaterFlow();
-      waterUpdateTimer = 0;
-    }
 
     frameCount++;
     fpsTimer += dt;
