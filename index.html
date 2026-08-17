@@ -393,15 +393,16 @@
   const sandMat = matFromTex(noiseTexture(0xdccb7d, 0.1));
   const gravelMat = matFromTex(noiseTexture(0x8d8d84, 0.22));
   const brickMat = matFromTex(brickTexture(0xa8442f, 0xcac0af));
-  const glassMat = new THREE.MeshLambertMaterial({ map: glassTexture(0xbfe8ff), transparent: true, opacity: 0.6 });
+  const glassMat = new THREE.MeshLambertMaterial({ map: glassTexture(0xbfe8ff), transparent: true, opacity: 0.6, depthWrite: true });
   const bedrockMat = matFromTex(bedrockTexture());
   
-  // [수정] depthWrite: false 적용하여 투명 블록 중복 렌더링 렉 대폭 감소
+  // [수정] 물 재질: depthWrite: true로 복원 및 투명 렌더링 정상화
   const waterMat = new THREE.MeshLambertMaterial({ 
     map: waterTexture(), 
     transparent: true, 
-    opacity: 0.6,
-    depthWrite: false
+    opacity: 0.7,
+    depthWrite: true,
+    depthTest: true
   });
 
   const grassMatArr = [grassSide, grassSide, grassTop, grassBottom, grassSide, grassSide];
@@ -428,16 +429,18 @@
     mesh.count = 0;
     mesh.castShadow = true;
     mesh.receiveShadow = true;
+    mesh.renderOrder = 0; // 일반 블록은 0순위
     mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     scene.add(mesh);
     return { mesh, count: 0, capacity: CAPACITY[typeIndex], slotToKey: [] };
   });
 
+  // [수정] 물 오브젝트의 renderOrder를 올려 불투명 지형보다 나중에 그려지도록 설정
   const waterMesh = new THREE.InstancedMesh(boxGeo, waterMat, CAPACITY[10]);
   waterMesh.count = 0;
   waterMesh.castShadow = false;
-  waterMesh.receiveShadow = false; // [수정] 수중 그림자 연산 비활성화
-  waterMesh.renderOrder = 1;
+  waterMesh.receiveShadow = true;
+  waterMesh.renderOrder = 10; 
   waterMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
   scene.add(waterMesh);
   const waterLayer = { mesh: waterMesh, count: 0, capacity: CAPACITY[10], slotToKey: [] };
@@ -702,7 +705,6 @@
     }
   }
 
-  // [수정] 스폰 시 나무나 나뭇잎/잔디 블럭 내부 생성을 방지하도록 최상단 검사 로직 추가
   function getGrassSpawnPos() {
     ensureChunksAroundPlayer(0, 0);
 
@@ -713,7 +715,6 @@
           if (terrainH > SEA_LEVEL + 1) {
             ensureChunksAroundPlayer(x, z);
             
-            // 실질적으로 위에 쌓인 블록(나무, 잎 등) 중 가장 높은 Y축 검색
             let topY = MIN_Y;
             for (let y = 30; y >= MIN_Y; y--) {
               const entry = world.get(key(x, y, z));
@@ -723,7 +724,6 @@
               }
             }
 
-            // 나무 줄기/잎 위가 아닌 평평한 잔디 블록 지형 위만 스폰지로 지정
             const topBlock = world.get(key(x, topY, z));
             if (topBlock && topBlock.typeIndex === GRASS) {
               return new THREE.Vector3(x + 0.5, topY + 1.8, z + 0.5);
