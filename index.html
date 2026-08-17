@@ -857,31 +857,48 @@ function getTargetedBlock() {
   return null;
 }
 
- function breakTargetedBlock() {
+function breakTargetedBlock() {
   triggerSwing();
   const hit = getTargetedBlock();
   if (!hit) return;
 
-  // 물 자체를 파괴하려고 하면 무시
+  // 물은 파괴 대상이 아님
   if (hit.typeIndex === WATER) return;
 
-  const entry = world.get(key(hit.gx, hit.gy, hit.gz));
+  const k = key(hit.gx, hit.gy, hit.gz);
+  const entry = world.get(k);
   if (entry) {
-    if (entry.typeIndex === BEDROCK) return;
+    if (entry.typeIndex === BEDROCK) return; // 기반암 보호
     spawnBlockParticles(hit.gx, hit.gy, hit.gz, BLOCK_DEFS[entry.typeIndex].color);
     playSound('break');
   }
 
-  const k = key(hit.gx, hit.gy, hit.gz);
   const c = chunkFor(hit.gx, hit.gz);
   
-  // 먼저 기존 일반 블록을 제거
+  // 선택한 블록 일단 제거
   removeBlockAt(hit.gx, hit.gy, hit.gz);
 
-  // 부순 위치가 해수면(SEA_LEVEL) 이하인 경우 즉시 물로 다시 채움
+  // 해수면(SEA_LEVEL) 이하 위치인 경우 처리
   if (hit.gy <= SEA_LEVEL) {
-    c.modifications.set(k, { action: 'add', typeIndex: WATER });
-    addBlock(hit.gx, hit.gy, hit.gz, WATER);
+    const neighbors = [
+      key(hit.gx + 1, hit.gy, hit.gz), key(hit.gx - 1, hit.gy, hit.gz),
+      key(hit.gx, hit.gy + 1, hit.gz), key(hit.gx, hit.gy - 1, hit.gz),
+      key(hit.gx, hit.gy, hit.gz + 1), key(hit.gx, hit.gy, hit.gz - 1)
+    ];
+
+    // 주변 6방향에 물이 하나라도 접해있는지 확인
+    const isAdjacentToWater = neighbors.some(nk => world.get(nk)?.typeIndex === WATER);
+
+    // 물과 닿아있거나 해수면 높이라면 '즉시' 물로 교체 후 퍼뜨림
+    if (isAdjacentToWater || hit.gy === SEA_LEVEL) {
+      c.modifications.set(k, { action: 'add', typeIndex: WATER });
+      addBlock(hit.gx, hit.gy, hit.gz, WATER);
+      
+      // 즉시 연쇄 물 확산 실행
+      updateWaterFlow();
+    } else {
+      c.modifications.set(k, { action: 'remove' });
+    }
   } else {
     c.modifications.set(k, { action: 'remove' });
   }
@@ -948,35 +965,41 @@ function getTargetedBlock() {
   const WATER_UPDATE_INTERVAL = 0.2; // 0.2초마다 물 확산 처리
 
   function updateWaterFlow() {
-    const currentWaterKeys = [];
-    for (const [k, entry] of world.entries()) {
-      if (entry.typeIndex === WATER) {
-        currentWaterKeys.push(k);
-      }
+  const waterKeys = [];
+  for (const [k, entry] of world.entries()) {
+    if (entry.typeIndex === WATER) {
+      waterKeys.push(k);
     }
+  }
 
-    for (const k of currentWaterKeys) {
-      const [x, y, z] = k.split(',').map(Number);
-      const neighbors = [
-        { x: x, y: y - 1, z: z }, // 아래
-        { x: x + 1, y: y, z: z }, // 동
-        { x: x - 1, y: y, z: z }, // 서
-        { x: x, y: y, z: z + 1 }, // 남
-        { x: x, y: y, z: z - 1 }  // 북
-      ];
+  for (const k of waterKeys) {
+    const [x, y, z] = k.split(',').map(Number);
 
-      for (const n of neighbors) {
-        if (n.y <= SEA_LEVEL && n.y >= MIN_Y) {
-          const neighborKey = key(n.x, n.y, n.z);
-          if (!world.has(neighborKey)) {
-            const c = chunkFor(n.x, n.z);
-            c.modifications.set(neighborKey, { action: 'add', typeIndex: WATER });
-            addBlock(n.x, n.y, n.z, WATER);
-          }
+    // 플레이어 주변 30블록 이내만 연산 (성능 최적화)
+    if (Math.hypot(x - player.pos.x, z - player.pos.z) > 30) continue;
+
+    const neighbors = [
+      { x: x, y: y - 1, z: z }, // 아래쪽 우선
+      { x: x + 1, y: y, z: z },
+      { x: x - 1, y: y, z: z },
+      { x: x, y: y, z: z + 1 },
+      { x: x, y: y, z: z - 1 }
+    ];
+
+    for (const n of neighbors) {
+      if (n.y <= SEA_LEVEL && n.y >= MIN_Y) {
+        const neighborKey = key(n.x, n.y, n.z);
+
+        // ★ 핵심: world에 아무런 블록도 없는 '완전한 빈 공간'일 때만 물 설치
+        if (!world.has(neighborKey)) {
+          const c = chunkFor(n.x, n.z);
+          c.modifications.set(neighborKey, { action: 'add', typeIndex: WATER });
+          addBlock(n.x, n.y, n.z, WATER);
         }
       }
     }
   }
+}
 
   // ---------- Physics & Movement ----------
   const GRAVITY = -26;
