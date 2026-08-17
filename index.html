@@ -481,6 +481,7 @@
     layer.mesh.instanceMatrix.needsUpdate = true;
     world.delete(k);
   }
+
   // ---------- 파티클 시스템 ----------
   const particles = [];
   const particleGeo = new THREE.BoxGeometry(0.12, 0.12, 0.12);
@@ -574,12 +575,12 @@
 
   // ---------- Terrain & Biomes & Trees ----------
   const SEA_LEVEL = 0;
-  const MIN_Y = -12; // 최하단 깊이 제한 설정
+  const MIN_Y = -12;
 
-function heightAt(x, z) {
-  const h = perlinLike(x, z);
-  return Math.floor(h + 5); // 🔥 +5 오프셋 추가! 전체 지형을 올리고 물 영역을 대폭 축소
-}
+  function heightAt(x, z) {
+    const h = perlinLike(x, z);
+    return Math.floor(h + 5);
+  }
 
   function plantTree(tx, ty, tz) {
     const treeHeight = 5 + Math.floor(hash2(tx, tz) * 2);
@@ -611,7 +612,7 @@ function heightAt(x, z) {
     return c;
   }
 
-function generateChunk(cx, cz) {
+  function generateChunk(cx, cz) {
     const ck = cx + ',' + cz;
     let chunk = chunks.get(ck);
     if (!chunk) { chunk = { modifications: new Map(), blockKeys: new Set(), loaded: false }; chunks.set(ck, chunk); }
@@ -634,7 +635,6 @@ function generateChunk(cx, cz) {
             if (y === MIN_Y) {
               addBlock(x, y, z, BEDROCK);
             } else if (y <= h) {
-              // 지형 생성 (모래/흙/돌)
               if (y === h) {
                 if (h <= SEA_LEVEL + 1) addBlock(x, y, z, SAND);
                 else addBlock(x, y, z, GRASS);
@@ -645,7 +645,6 @@ function generateChunk(cx, cz) {
                 addBlock(x, y, z, STONE);
               }
             } else if (y > h && y <= SEA_LEVEL) {
-              // 지형 표면(h)부터 해수면(y=0)까지 공기층 없이 꽉 채움
               addBlock(x, y, z, WATER);
             }
           }
@@ -659,8 +658,44 @@ function generateChunk(cx, cz) {
     }
   }
 
+  function unloadChunk(cx, cz) {
+    const ck = cx + ',' + cz;
+    const chunk = chunks.get(ck);
+    if (!chunk || !chunk.loaded) return;
+
+    // 해당 청크 범위 안의 블록 지우기
+    for (let lx = 0; lx < CHUNK_SIZE; lx++) {
+      for (let lz = 0; lz < CHUNK_SIZE; lz++) {
+        const x = cx * CHUNK_SIZE + lx;
+        const z = cz * CHUNK_SIZE + lz;
+        const h = heightAt(x, z);
+        const maxY = Math.max(h, SEA_LEVEL) + 10; // 나무 높이 수용을 위해 여유 있게 계산
+        for (let y = MIN_Y; y <= maxY; y++) {
+          removeBlockAt(x, y, z);
+        }
+      }
+    }
+    chunk.blockKeys.clear();
+    chunk.loaded = false;
+  }
+
+  function unloadFarChunks(pcx, pcz) {
+    for (const [ck, chunk] of chunks.entries()) {
+      if (!chunk.loaded) continue;
+      const [cx, cz] = ck.split(',').map(Number);
+      if (Math.abs(cx - pcx) > RENDER_DISTANCE || Math.abs(cz - pcz) > RENDER_DISTANCE) {
+        unloadChunk(cx, cz);
+      }
+    }
+  }
+
   function ensureChunksAroundPlayer(px, pz) {
     const pcx = Math.floor(px / CHUNK_SIZE), pcz = Math.floor(pz / CHUNK_SIZE);
+
+    // 1. 플레이어 범위 밖의 먼 청크 삭제 (InstancedMesh 인스턴스 해제)
+    unloadFarChunks(pcx, pcz);
+
+    // 2. 플레이어 주변 청크 생성
     for (let dx = -RENDER_DISTANCE; dx <= RENDER_DISTANCE; dx++) {
       for (let dz = -RENDER_DISTANCE; dz <= RENDER_DISTANCE; dz++) {
         const cx = pcx + dx, cz = pcz + dz;
@@ -672,16 +707,14 @@ function generateChunk(cx, cz) {
 
   ensureChunksAroundPlayer(0, 0);
 
-  // 🔥 잔디 블록(SEA_LEVEL + 1 보다 높은 지형)을 찾아 위치를 반환하는 함수
   function getGrassSpawnPos() {
     for (let radius = 0; radius < 100; radius++) {
       for (let x = -radius; x <= radius; x++) {
         for (let z = -radius; z <= radius; z++) {
           const h = heightAt(x, z);
-          // 해수면보다 높아 잔디 블록이 생성되는 위치 확인
           if (h > SEA_LEVEL + 1) {
             ensureChunksAroundPlayer(x, z);
-            return new THREE.Vector3(x + 0.5, h + 1.8, z + 0.5); // 잔디 바로 위에 착지
+            return new THREE.Vector3(x + 0.5, h + 1.8, z + 0.5);
           }
         }
       }
@@ -692,7 +725,7 @@ function generateChunk(cx, cz) {
   const initialSpawnPos = getGrassSpawnPos();
 
   const player = {
-    pos: initialSpawnPos.clone(), // 🔥 항상 잔디 위에서 스폰!
+    pos: initialSpawnPos.clone(),
     velocity: new THREE.Vector3(0, 0, 0),
     onGround: false,
     inWater: false,
@@ -778,8 +811,7 @@ function generateChunk(cx, cz) {
     return entry && entry.typeIndex === WATER;
   }
 
-  // 물 블록도 레이캐스트 타겟으로 정확히 인지하도록 수정
- function getTargetedBlock() {
+  function getTargetedBlock() {
     const dir = new THREE.Vector3();
     camera.getWorldDirection(dir);
     const origin = camera.position;
@@ -796,7 +828,6 @@ function generateChunk(cx, cz) {
     let dist = 0;
 
     while (dist < 7) {
-      // 🔥 물(WATER)은 통과하고, 땅/돌 같은 고체 블록(isSolidAt)만 타겟팅!
       if (isSolidAt(x, y, z)) {
         return { gx: x, gy: y, gz: z, px: x - normX, py: y - normY, pz: z - normZ };
       }
@@ -826,7 +857,7 @@ function generateChunk(cx, cz) {
     removeBlockAt(hit.gx, hit.gy, hit.gz);
   }
 
- function placeTargetedBlock() {
+  function placeTargetedBlock() {
     triggerSwing();
     const hit = getTargetedBlock();
     if (!hit) return;
@@ -838,7 +869,6 @@ function generateChunk(cx, cz) {
 
     if (pMinX < nx + 1 && pMaxX > nx && pMinY < ny + 1 && pMaxY > ny && pMinZ < nz + 1 && pMaxZ > nz) return;
 
-    // 🔥 설치하려는 공간에 물이 차 있다면 물을 지워주고 블록을 밀어넣음!
     if (isWaterAt(nx, ny, nz)) {
       removeBlockAt(nx, ny, nz);
     }
@@ -920,8 +950,6 @@ function generateChunk(cx, cz) {
     if (player.inWater) {
       player.velocity.x = moveX * MOVE_SPEED * 0.7;
       player.velocity.z = moveZ * MOVE_SPEED * 0.7;
-      
-      // 수중 부력/상승 속도를 대폭 늘려 물가 점프 가능하게 수정
       if (keys['Space']) {
         player.velocity.y = 7.5;
       } else {
@@ -965,9 +993,9 @@ function generateChunk(cx, cz) {
     }
 
     if (player.pos.y < MIN_Y - 10) {
-  player.pos.copy(initialSpawnPos); // 🔥 재스폰 시에도 잔디 위로 이동
-  player.velocity.set(0, 0, 0);
-}
+      player.pos.copy(initialSpawnPos);
+      player.velocity.set(0, 0, 0);
+    }
 
     ensureChunksAroundPlayer(player.pos.x, player.pos.z);
     updateHandAnimation(dt, isMoving);
