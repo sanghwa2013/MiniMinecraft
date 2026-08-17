@@ -381,7 +381,6 @@
   // ---------- Block Definitions ----------
   const boxGeo = new THREE.BoxGeometry(1, 1, 1);
   
-  // 마인크래프트 높이 규격 (y + 0.85) 적용
   const waterPlaneGeo = new THREE.PlaneGeometry(1, 1);
   waterPlaneGeo.rotateX(-Math.PI / 2);
 
@@ -455,7 +454,6 @@
     if (layer.count >= layer.capacity) return;
     const idx = layer.count;
     
-    // 수면 높이를 마인크래프트 해수면 높이(0.85)로 배치해 경계 정돈
     if (typeIndex === WATER) {
       tmpMat.makeTranslation(x + 0.5, y + 0.85, z + 0.5);
     } else {
@@ -788,18 +786,27 @@
     player.pitch = Math.max(-Math.PI / 2 + 0.01, Math.min(Math.PI / 2 - 0.01, player.pitch));
   });
 
-  // ---------- Hotbar UI ----------
+  // ---------- Hotbar UI (수정된 부분) ----------
   const hotbarEl = document.getElementById('hotbar');
+  
   function iconDataURL(def) {
-    const mat = Array.isArray(def.material) ? def.material[2] : def.material;
-    return mat.map.image.toDataURL();
+    const mat = Array.isArray(def.material) ? def.material[0] : def.material;
+    if (mat && mat.map && mat.map.image) {
+      const img = mat.map.image;
+      if (img instanceof HTMLCanvasElement) {
+        return img.toDataURL();
+      }
+    }
+    return '';
   }
+
   function buildHotbar() {
     hotbarEl.innerHTML = '';
     BLOCK_DEFS.slice(0, 9).forEach((def, i) => {
       const slot = document.createElement('div');
       slot.className = 'slot' + (i === 0 ? ' selected' : '');
-      slot.innerHTML = `<span class="num">${i + 1}</span><div class="swatch" style="background-image:url(${iconDataURL(def)})"></div><span class="slot-name">${def.name}</span>`;
+      const url = iconDataURL(def);
+      slot.innerHTML = `<span class="num">${i + 1}</span><div class="swatch" style="background-image:url(${url})"></div><span class="slot-name">${def.name}</span>`;
       slot.addEventListener('click', () => selectSlot(i));
       hotbarEl.appendChild(slot);
     });
@@ -941,7 +948,6 @@
     const headInWater = player.pos.y <= SEA_LEVEL + 0.1 && heightAt(Math.floor(player.pos.x), Math.floor(player.pos.z)) < SEA_LEVEL;
     player.inWater = headInWater;
 
-    // 수중 진입/이탈 시 음향 및 부드러운 오버레이 처리
     if (player.inWater !== wasInWater) {
       playSound('splash');
       wasInWater = player.inWater;
@@ -1037,7 +1043,6 @@
     const dt = Math.min((now - lastTime) / 1000, 0.1);
     lastTime = now;
 
-    // 수면 오프셋 이동으로 잔잔한 물결 애니메이션 구현
     waterTex.offset.x += dt * 0.04;
     waterTex.offset.y += dt * 0.02;
 
