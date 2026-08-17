@@ -41,12 +41,12 @@
   #water-overlay {
     position: fixed;
     inset: 0;
-    background: rgba(20, 80, 160, 0.35);
+    background: rgba(20, 80, 160, 0.45);
     backdrop-filter: blur(1px);
     pointer-events: none;
     z-index: 5;
     opacity: 0;
-    transition: opacity 0.25s ease-in-out;
+    transition: opacity 0.2s ease-in-out;
   }
   #water-overlay.active {
     opacity: 1;
@@ -380,7 +380,6 @@
 
   // ---------- Block Definitions ----------
   const boxGeo = new THREE.BoxGeometry(1, 1, 1);
-  
   const waterPlaneGeo = new THREE.PlaneGeometry(1, 1);
   waterPlaneGeo.rotateX(-Math.PI / 2);
 
@@ -424,7 +423,7 @@
     { name: '유리', material: glassMat, color: 0xbfe8ff },
     { name: '기반암', material: bedrockMat, color: 0x333333 }
   ];
-  const CAPACITY = [20000, 30000, 50000, 10000, 15000, 20000, 10000, 10000, 10000, 20000, 15000];
+  const CAPACITY = [40000, 50000, 80000, 20000, 30000, 40000, 20000, 20000, 20000, 40000, 30000];
   const GRASS = 0, DIRT = 1, STONE = 2, WOOD = 3, LEAVES = 4, SAND = 5, GRAVEL = 6, BRICK = 7, GLASS = 8, BEDROCK = 9, WATER = 10;
 
   // ---------- Instanced Meshes ----------
@@ -528,7 +527,7 @@
     }
   }
 
-  // ---------- 1인칭 손 & 들고 있는 블록 ----------
+  // ---------- 손 애니메이션 & Held Block ----------
   const handGroup = new THREE.Group();
   camera.add(handGroup);
   scene.add(camera);
@@ -609,7 +608,7 @@
   }
 
   const CHUNK_SIZE = 16;
-  const RENDER_DISTANCE = 2;
+  const RENDER_DISTANCE = 3;
   const chunks = new Map();
 
   function chunkFor(x, z) {
@@ -640,8 +639,6 @@
             const mod = chunk.modifications.get(k);
             if (mod.action === 'add') addBlock(x, y, z, mod.typeIndex);
           } else {
-            if (y < h - 1 && y > MIN_Y + 1) continue;
-
             if (y === MIN_Y) {
               addBlock(x, y, z, BEDROCK);
             } else if (y <= h) {
@@ -678,9 +675,7 @@
       for (let lz = 0; lz < CHUNK_SIZE; lz++) {
         const x = cx * CHUNK_SIZE + lx;
         const z = cz * CHUNK_SIZE + lz;
-        const h = heightAt(x, z);
-        const maxY = Math.max(h, SEA_LEVEL) + 10;
-        for (let y = MIN_Y; y <= maxY; y++) {
+        for (let y = MIN_Y; y <= 35; y++) {
           removeBlockAt(x, y, z);
         }
       }
@@ -786,27 +781,18 @@
     player.pitch = Math.max(-Math.PI / 2 + 0.01, Math.min(Math.PI / 2 - 0.01, player.pitch));
   });
 
-  // ---------- Hotbar UI (수정된 부분) ----------
+  // ---------- Hotbar UI ----------
   const hotbarEl = document.getElementById('hotbar');
-  
   function iconDataURL(def) {
-    const mat = Array.isArray(def.material) ? def.material[0] : def.material;
-    if (mat && mat.map && mat.map.image) {
-      const img = mat.map.image;
-      if (img instanceof HTMLCanvasElement) {
-        return img.toDataURL();
-      }
-    }
-    return '';
+    const mat = Array.isArray(def.material) ? def.material[2] : def.material;
+    return mat.map.image.toDataURL();
   }
-
   function buildHotbar() {
     hotbarEl.innerHTML = '';
     BLOCK_DEFS.slice(0, 9).forEach((def, i) => {
       const slot = document.createElement('div');
       slot.className = 'slot' + (i === 0 ? ' selected' : '');
-      const url = iconDataURL(def);
-      slot.innerHTML = `<span class="num">${i + 1}</span><div class="swatch" style="background-image:url(${url})"></div><span class="slot-name">${def.name}</span>`;
+      slot.innerHTML = `<span class="num">${i + 1}</span><div class="swatch" style="background-image:url(${iconDataURL(def)})"></div><span class="slot-name">${def.name}</span>`;
       slot.addEventListener('click', () => selectSlot(i));
       hotbarEl.appendChild(slot);
     });
@@ -945,23 +931,26 @@
     const isMoving = len > 0;
     if (isMoving) { moveX /= len; moveZ /= len; }
 
-    const headInWater = player.pos.y <= SEA_LEVEL + 0.1 && heightAt(Math.floor(player.pos.x), Math.floor(player.pos.z)) < SEA_LEVEL;
-    player.inWater = headInWater;
+    const eyeY = player.pos.y;
+    const playerBlockX = Math.floor(player.pos.x);
+    const playerBlockZ = Math.floor(player.pos.z);
+    const hAtPos = heightAt(playerBlockX, playerBlockZ);
+
+    const isHeadInWater = (eyeY <= SEA_LEVEL + 0.85) && (hAtPos < SEA_LEVEL);
+    player.inWater = isHeadInWater;
 
     if (player.inWater !== wasInWater) {
       playSound('splash');
       wasInWater = player.inWater;
     }
 
-    if (headInWater) {
-      waterMesh.visible = false;
+    if (isHeadInWater) {
       waterOverlayEl.classList.add('active');
       scene.background.lerp(waterFogColor, 0.2);
       scene.fog.color.lerp(waterFogColor, 0.2);
       scene.fog.near = 1;
       scene.fog.far = 18;
     } else {
-      waterMesh.visible = true;
       waterOverlayEl.classList.remove('active');
       scene.background.lerp(skyColor, 0.2);
       scene.fog.color.lerp(skyColor, 0.2);
