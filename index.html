@@ -41,7 +41,7 @@
   #water-overlay {
     position: fixed;
     inset: 0;
-    background: rgba(10, 60, 140, 0.35);
+    background: rgba(20, 80, 160, 0.28);
     pointer-events: none;
     z-index: 5;
     display: none;
@@ -237,7 +237,7 @@
   // ---------- Scene setup ----------
   const scene = new THREE.Scene();
   const skyColor = new THREE.Color(0x7ec0ee);
-  const waterFogColor = new THREE.Color(0x1a5276);
+  const waterFogColor = new THREE.Color(0x246293);
   
   scene.background = skyColor;
   scene.fog = new THREE.Fog(skyColor, 24, 56);
@@ -246,8 +246,8 @@
 
   const renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: "high-performance" });
   renderer.setSize(window.innerWidth, window.innerHeight);
-  renderer.setPixelRatio(1.0); // 렉 방지를 위해 해상도 배율 1.0으로 고정
-  renderer.shadowMap.enabled = false; // 성능 최적화를 위해 그림자 비활성화
+  renderer.setPixelRatio(1.0);
+  renderer.shadowMap.enabled = false;
   container.appendChild(renderer.domElement);
 
   const hemi = new THREE.HemisphereLight(0xffffff, 0x444444, 0.85);
@@ -345,10 +345,10 @@
     return toTexture(canvas);
   }
   function waterTexture() {
-    const base = new THREE.Color(0x357abd);
+    const base = new THREE.Color(0x3e8ed0);
     const canvas = makeCanvas(); const ctx = canvas.getContext('2d');
     for (let y = 0; y < 16; y++) for (let x = 0; x < 16; x++) {
-      px(ctx, x, y, '#' + jitterColor(base, 0.15, x * 9 + y * 7).getHexString());
+      px(ctx, x, y, '#' + jitterColor(base, 0.12, x * 9 + y * 7).getHexString());
     }
     return toTexture(canvas);
   }
@@ -363,6 +363,11 @@
 
   // ---------- Block Definitions ----------
   const boxGeo = new THREE.BoxGeometry(1, 1, 1);
+  
+  // [개선 1] 수면 격자선 완전 제거를 위해 상단 단일 평면(Plane) 지오메트리 사용
+  const waterPlaneGeo = new THREE.PlaneGeometry(1, 1);
+  waterPlaneGeo.rotateX(-Math.PI / 2);
+
   function matFromTex(tex) { return new THREE.MeshLambertMaterial({ map: tex }); }
 
   const grassTop = matFromTex(noiseTexture(0x6cbb3c, 0.18));
@@ -379,11 +384,11 @@
   const glassMat = new THREE.MeshLambertMaterial({ map: glassTexture(0xbfe8ff), transparent: true, opacity: 0.6, depthWrite: false });
   const bedrockMat = matFromTex(bedrockTexture());
   
-  // [개선] 외부에서 격자선 없이 깔끔하게 보이도록 depthWrite: false와 적절한 투명도 부여
   const waterMat = new THREE.MeshLambertMaterial({ 
     map: waterTexture(), 
     transparent: true, 
     opacity: 0.55,
+    side: THREE.DoubleSide,
     depthWrite: false
   });
 
@@ -414,7 +419,7 @@
     return { mesh, count: 0, capacity: CAPACITY[typeIndex], slotToKey: [] };
   });
 
-  const waterMesh = new THREE.InstancedMesh(boxGeo, waterMat, CAPACITY[10]);
+  const waterMesh = new THREE.InstancedMesh(waterPlaneGeo, waterMat, CAPACITY[10]);
   waterMesh.count = 0;
   waterMesh.renderOrder = 2; 
   waterMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
@@ -431,7 +436,14 @@
     const layer = typeIndex === WATER ? waterLayer : blockLayers[typeIndex];
     if (layer.count >= layer.capacity) return;
     const idx = layer.count;
-    tmpMat.makeTranslation(x + 0.5, y + 0.5, z + 0.5);
+    
+    // 물 평면 위치 보정 (표면 위 높이 지정)
+    if (typeIndex === WATER) {
+      tmpMat.makeTranslation(x + 0.5, y + 0.99, z + 0.5);
+    } else {
+      tmpMat.makeTranslation(x + 0.5, y + 0.5, z + 0.5);
+    }
+
     layer.mesh.setMatrixAt(idx, tmpMat);
     layer.mesh.instanceMatrix.needsUpdate = true;
     layer.slotToKey[idx] = k;
@@ -581,7 +593,7 @@
   }
 
   const CHUNK_SIZE = 16;
-  const RENDER_DISTANCE = 2; // [렉 최적화] 렌더링 거리 조정
+  const RENDER_DISTANCE = 2;
   const chunks = new Map();
 
   function chunkFor(x, z) {
@@ -592,7 +604,6 @@
     return c;
   }
 
-  // [렉 최적화 핵심] 외부로 노출되지 않는 속 블록은 인스턴스 생성을 생략
   function generateChunk(cx, cz) {
     const ck = cx + ',' + cz;
     let chunk = chunks.get(ck);
@@ -609,14 +620,10 @@
         for (let y = MIN_Y; y <= maxY; y++) {
           const k = key(x, y, z);
 
-          // 물 속 깊은 곳(공기와 닿지 않는 물)은 생성하지 않아 속 비침과 렉 완벽 해결
-          if (y < SEA_LEVEL && y < h && y < SEA_LEVEL - 1) continue;
-
           if (chunk.modifications.has(k)) {
             const mod = chunk.modifications.get(k);
             if (mod.action === 'add') addBlock(x, y, z, mod.typeIndex);
           } else {
-            // 속 블록 걸러내기 (상하좌우가 모두 채워져있으면 스킵)
             if (y < h - 1 && y > MIN_Y + 1) continue;
 
             if (y === MIN_Y) {
@@ -631,13 +638,13 @@
               } else {
                 addBlock(x, y, z, STONE);
               }
-            } else if (y > h && y <= SEA_LEVEL) {
-              // 물 블록은 최상단 표면만 생성해 투명 충돌 최소화
-              if (y === SEA_LEVEL || y === h + 1) {
-                addBlock(x, y, z, WATER);
-              }
-            }
+            } 
           }
+        }
+
+        // [개선] 해수면 위치에 단일 평면 물 표면만 딱 1개 배치하여 격자선 방지
+        if (h < SEA_LEVEL) {
+          addBlock(x, SEA_LEVEL, z, WATER);
         }
 
         if (h > SEA_LEVEL + 1 && hash2(x * 1.5, z * 2.3) < 0.02) {
@@ -689,7 +696,6 @@
     }
   }
 
-  // [수정] 확실하게 잔디 블록 위에서 스폰되도록 탐색 로직 보장
   function getGrassSpawnPos() {
     ensureChunksAroundPlayer(0, 0);
 
@@ -697,9 +703,8 @@
       for (let x = -radius; x <= radius; x++) {
         for (let z = -radius; z <= radius; z++) {
           const h = heightAt(x, z);
-          if (h > SEA_LEVEL + 1) { // 물 위가 아닌 지형
+          if (h > SEA_LEVEL + 1) { 
             ensureChunksAroundPlayer(x, z);
-            
             for (let y = h + 5; y >= h - 2; y--) {
               const entry = world.get(key(x, y, z));
               if (entry && entry.typeIndex === GRASS) {
@@ -915,15 +920,17 @@
     const isMoving = len > 0;
     if (isMoving) { moveX /= len; moveZ /= len; }
 
-    // [수정] 수중 판단: 플레이어 위치 기준 y 좌표가 해수면(SEA_LEVEL) 이하인 경우
     const headInWater = player.pos.y <= SEA_LEVEL + 0.2 && heightAt(Math.floor(player.pos.x), Math.floor(player.pos.z)) <= SEA_LEVEL;
     player.inWater = headInWater;
 
+    // [개선 2] 물속 입장 시 수면 메쉬를 감춰 수중 시야를 100% 맑게 유지
     if (headInWater) {
+      waterMesh.visible = false;
       waterOverlayEl.style.display = 'block';
       scene.background = waterFogColor;
-      scene.fog = new THREE.Fog(waterFogColor, 4, 18);
+      scene.fog = new THREE.Fog(waterFogColor, 2, 20);
     } else {
+      waterMesh.visible = true;
       waterOverlayEl.style.display = 'none';
       scene.background = skyColor;
       scene.fog = new THREE.Fog(skyColor, 24, 56);
