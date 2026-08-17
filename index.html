@@ -41,7 +41,7 @@
   #water-overlay {
     position: fixed;
     inset: 0;
-    background: rgba(20, 80, 160, 0.45);
+    background: rgba(10, 60, 140, 0.35);
     pointer-events: none;
     z-index: 5;
     display: none;
@@ -231,46 +231,29 @@
       gain.gain.setValueAtTime(0.15, now);
       gain.gain.exponentialRampToValueAtTime(0.01, now + 0.06);
       osc.start(now); osc.stop(now + 0.06);
-    } else if (type === 'water') {
-      osc.type = 'sine';
-      osc.frequency.setValueAtTime(280, now);
-      osc.frequency.exponentialRampToValueAtTime(100, now + 0.12);
-      gain.gain.setValueAtTime(0.3, now);
-      gain.gain.exponentialRampToValueAtTime(0.01, now + 0.12);
-      osc.start(now); osc.stop(now + 0.12);
     }
   }
 
   // ---------- Scene setup ----------
   const scene = new THREE.Scene();
   const skyColor = new THREE.Color(0x7ec0ee);
-  const waterFogColor = new THREE.Color(0x0a3d62);
+  const waterFogColor = new THREE.Color(0x1a5276);
   
   scene.background = skyColor;
-  scene.fog = new THREE.Fog(skyColor, 20, 48);
+  scene.fog = new THREE.Fog(skyColor, 24, 56);
 
   const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.05, 1000);
 
-  const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
+  const renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: "high-performance" });
   renderer.setSize(window.innerWidth, window.innerHeight);
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
-  renderer.shadowMap.enabled = true;
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.setPixelRatio(1.0); // 렉 방지를 위해 해상도 배율 1.0으로 고정
+  renderer.shadowMap.enabled = false; // 성능 최적화를 위해 그림자 비활성화
   container.appendChild(renderer.domElement);
 
   const hemi = new THREE.HemisphereLight(0xffffff, 0x444444, 0.85);
   scene.add(hemi);
-  const sun = new THREE.DirectionalLight(0xffffff, 0.7);
+  const sun = new THREE.DirectionalLight(0xffffff, 0.6);
   sun.position.set(40, 60, 30);
-  sun.castShadow = true;
-  sun.shadow.mapSize.width = 1024;
-  sun.shadow.mapSize.height = 1024;
-  sun.shadow.camera.near = 0.5;
-  sun.shadow.camera.far = 150;
-  sun.shadow.camera.left = -30;
-  sun.shadow.camera.right = 30;
-  sun.shadow.camera.top = 30;
-  sun.shadow.camera.bottom = -30;
   scene.add(sun);
 
   // ---------- Math Helpers & Noise ----------
@@ -362,10 +345,10 @@
     return toTexture(canvas);
   }
   function waterTexture() {
-    const base = new THREE.Color(0x3d7fd9);
+    const base = new THREE.Color(0x357abd);
     const canvas = makeCanvas(); const ctx = canvas.getContext('2d');
     for (let y = 0; y < 16; y++) for (let x = 0; x < 16; x++) {
-      px(ctx, x, y, '#' + jitterColor(base, 0.25, x * 9 + y * 7).getHexString());
+      px(ctx, x, y, '#' + jitterColor(base, 0.15, x * 9 + y * 7).getHexString());
     }
     return toTexture(canvas);
   }
@@ -393,16 +376,15 @@
   const sandMat = matFromTex(noiseTexture(0xdccb7d, 0.1));
   const gravelMat = matFromTex(noiseTexture(0x8d8d84, 0.22));
   const brickMat = matFromTex(brickTexture(0xa8442f, 0xcac0af));
-  const glassMat = new THREE.MeshLambertMaterial({ map: glassTexture(0xbfe8ff), transparent: true, opacity: 0.6, depthWrite: true });
+  const glassMat = new THREE.MeshLambertMaterial({ map: glassTexture(0xbfe8ff), transparent: true, opacity: 0.6, depthWrite: false });
   const bedrockMat = matFromTex(bedrockTexture());
   
-  // [수정] 물 재질: depthWrite: true로 복원 및 투명 렌더링 정상화
+  // [개선] 외부에서 격자선 없이 깔끔하게 보이도록 depthWrite: false와 적절한 투명도 부여
   const waterMat = new THREE.MeshLambertMaterial({ 
     map: waterTexture(), 
     transparent: true, 
-    opacity: 0.7,
-    depthWrite: true,
-    depthTest: true
+    opacity: 0.55,
+    depthWrite: false
   });
 
   const grassMatArr = [grassSide, grassSide, grassTop, grassBottom, grassSide, grassSide];
@@ -420,27 +402,21 @@
     { name: '유리', material: glassMat, color: 0xbfe8ff },
     { name: '기반암', material: bedrockMat, color: 0x333333 }
   ];
-  const CAPACITY = [35000, 80000, 300000, 15000, 30000, 100000, 15000, 15000, 15000, 35000, 50000];
+  const CAPACITY = [20000, 30000, 50000, 10000, 15000, 20000, 10000, 10000, 10000, 20000, 15000];
   const GRASS = 0, DIRT = 1, STONE = 2, WOOD = 3, LEAVES = 4, SAND = 5, GRAVEL = 6, BRICK = 7, GLASS = 8, BEDROCK = 9, WATER = 10;
 
   // ---------- Instanced Meshes ----------
   const blockLayers = BLOCK_DEFS.map((def, typeIndex) => {
     const mesh = new THREE.InstancedMesh(boxGeo, def.material, CAPACITY[typeIndex]);
     mesh.count = 0;
-    mesh.castShadow = true;
-    mesh.receiveShadow = true;
-    mesh.renderOrder = 0; // 일반 블록은 0순위
     mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     scene.add(mesh);
     return { mesh, count: 0, capacity: CAPACITY[typeIndex], slotToKey: [] };
   });
 
-  // [수정] 물 오브젝트의 renderOrder를 올려 불투명 지형보다 나중에 그려지도록 설정
   const waterMesh = new THREE.InstancedMesh(boxGeo, waterMat, CAPACITY[10]);
   waterMesh.count = 0;
-  waterMesh.castShadow = false;
-  waterMesh.receiveShadow = true;
-  waterMesh.renderOrder = 10; 
+  waterMesh.renderOrder = 2; 
   waterMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
   scene.add(waterMesh);
   const waterLayer = { mesh: waterMesh, count: 0, capacity: CAPACITY[10], slotToKey: [] };
@@ -500,12 +476,12 @@
 
   function spawnBlockParticles(x, y, z, colorHex) {
     const mat = getParticleMat(colorHex);
-    for (let i = 0; i < 8; i++) {
+    for (let i = 0; i < 6; i++) {
       const p = new THREE.Mesh(particleGeo, mat);
       p.position.set(x + 0.5 + (Math.random() - 0.5) * 0.6, y + 0.5 + (Math.random() - 0.5) * 0.6, z + 0.5 + (Math.random() - 0.5) * 0.6);
-      const vel = new THREE.Vector3((Math.random() - 0.5) * 5, Math.random() * 4 + 2, (Math.random() - 0.5) * 5);
+      const vel = new THREE.Vector3((Math.random() - 0.5) * 4, Math.random() * 3 + 2, (Math.random() - 0.5) * 4);
       scene.add(p);
-      particles.push({ mesh: p, vel, life: 0.4 });
+      particles.push({ mesh: p, vel, life: 0.35 });
     }
   }
 
@@ -579,7 +555,7 @@
 
   // ---------- Terrain & Biomes & Trees ----------
   const SEA_LEVEL = 0;
-  const MIN_Y = -12;
+  const MIN_Y = -10;
 
   function heightAt(x, z) {
     const h = perlinLike(x, z);
@@ -605,23 +581,23 @@
   }
 
   const CHUNK_SIZE = 16;
-  const RENDER_DISTANCE = 3;
+  const RENDER_DISTANCE = 2; // [렉 최적화] 렌더링 거리 조정
   const chunks = new Map();
 
   function chunkFor(x, z) {
     const cx = Math.floor(x / CHUNK_SIZE), cz = Math.floor(z / CHUNK_SIZE);
     const ck = cx + ',' + cz;
     let c = chunks.get(ck);
-    if (!c) { c = { modifications: new Map(), blockKeys: new Set(), loaded: false }; chunks.set(ck, c); }
+    if (!c) { c = { modifications: new Map(), loaded: false }; chunks.set(ck, c); }
     return c;
   }
 
+  // [렉 최적화 핵심] 외부로 노출되지 않는 속 블록은 인스턴스 생성을 생략
   function generateChunk(cx, cz) {
     const ck = cx + ',' + cz;
     let chunk = chunks.get(ck);
-    if (!chunk) { chunk = { modifications: new Map(), blockKeys: new Set(), loaded: false }; chunks.set(ck, chunk); }
+    if (!chunk) { chunk = { modifications: new Map(), loaded: false }; chunks.set(ck, chunk); }
     if (chunk.loaded) return;
-    chunk.blockKeys.clear();
     chunk.loaded = true;
 
     for (let lx = 0; lx < CHUNK_SIZE; lx++) {
@@ -632,10 +608,17 @@
 
         for (let y = MIN_Y; y <= maxY; y++) {
           const k = key(x, y, z);
+
+          // 물 속 깊은 곳(공기와 닿지 않는 물)은 생성하지 않아 속 비침과 렉 완벽 해결
+          if (y < SEA_LEVEL && y < h && y < SEA_LEVEL - 1) continue;
+
           if (chunk.modifications.has(k)) {
             const mod = chunk.modifications.get(k);
             if (mod.action === 'add') addBlock(x, y, z, mod.typeIndex);
           } else {
+            // 속 블록 걸러내기 (상하좌우가 모두 채워져있으면 스킵)
+            if (y < h - 1 && y > MIN_Y + 1) continue;
+
             if (y === MIN_Y) {
               addBlock(x, y, z, BEDROCK);
             } else if (y <= h) {
@@ -649,10 +632,12 @@
                 addBlock(x, y, z, STONE);
               }
             } else if (y > h && y <= SEA_LEVEL) {
-              addBlock(x, y, z, WATER);
+              // 물 블록은 최상단 표면만 생성해 투명 충돌 최소화
+              if (y === SEA_LEVEL || y === h + 1) {
+                addBlock(x, y, z, WATER);
+              }
             }
           }
-          chunk.blockKeys.add(k);
         }
 
         if (h > SEA_LEVEL + 1 && hash2(x * 1.5, z * 2.3) < 0.02) {
@@ -678,7 +663,6 @@
         }
       }
     }
-    chunk.blockKeys.clear();
     chunk.loaded = false;
   }
 
@@ -705,34 +689,28 @@
     }
   }
 
+  // [수정] 확실하게 잔디 블록 위에서 스폰되도록 탐색 로직 보장
   function getGrassSpawnPos() {
     ensureChunksAroundPlayer(0, 0);
 
-    for (let radius = 0; radius < 100; radius++) {
+    for (let radius = 0; radius < 80; radius++) {
       for (let x = -radius; x <= radius; x++) {
         for (let z = -radius; z <= radius; z++) {
-          const terrainH = heightAt(x, z);
-          if (terrainH > SEA_LEVEL + 1) {
+          const h = heightAt(x, z);
+          if (h > SEA_LEVEL + 1) { // 물 위가 아닌 지형
             ensureChunksAroundPlayer(x, z);
             
-            let topY = MIN_Y;
-            for (let y = 30; y >= MIN_Y; y--) {
+            for (let y = h + 5; y >= h - 2; y--) {
               const entry = world.get(key(x, y, z));
-              if (entry && entry.typeIndex !== WATER) {
-                topY = y;
-                break;
+              if (entry && entry.typeIndex === GRASS) {
+                return new THREE.Vector3(x + 0.5, y + 1.8, z + 0.5);
               }
-            }
-
-            const topBlock = world.get(key(x, topY, z));
-            if (topBlock && topBlock.typeIndex === GRASS) {
-              return new THREE.Vector3(x + 0.5, topY + 1.8, z + 0.5);
             }
           }
         }
       }
     }
-    return new THREE.Vector3(0.5, 10, 0.5);
+    return new THREE.Vector3(0.5, 12.8, 0.5);
   }
 
   const initialSpawnPos = getGrassSpawnPos();
@@ -813,15 +791,10 @@
     updateHeldBlockMaterial(i);
   }
 
-  // ---------- DDA Raycast Target System ----------
+  // ---------- Raycast Target ----------
   function isSolidAt(x, y, z) { 
     const entry = world.get(key(x, y, z));
     return entry && entry.typeIndex !== WATER;
-  }
-
-  function isWaterAt(x, y, z) {
-    const entry = world.get(key(x, y, z));
-    return entry && entry.typeIndex === WATER;
   }
 
   function getTargetedBlock() {
@@ -882,10 +855,6 @@
 
     if (pMinX < nx + 1 && pMaxX > nx && pMinY < ny + 1 && pMaxY > ny && pMinZ < nz + 1 && pMaxZ > nz) return;
 
-    if (isWaterAt(nx, ny, nz)) {
-      removeBlockAt(nx, ny, nz);
-    }
-
     const c = chunkFor(nx, nz);
     c.modifications.set(key(nx, ny, nz), { action: 'add', typeIndex: selectedSlot });
     addBlock(nx, ny, nz, selectedSlot);
@@ -899,7 +868,7 @@
   });
   renderer.domElement.addEventListener('contextmenu', (e) => e.preventDefault());
 
-  // ---------- Block Selection Outline ----------
+  // ---------- Outline ----------
   const outlineGeo = new THREE.EdgesGeometry(new THREE.BoxGeometry(1.005, 1.005, 1.005));
   const outlineMat = new THREE.LineBasicMaterial({ color: 0x000000, linewidth: 2 });
   const outline = new THREE.LineSegments(outlineGeo, outlineMat);
@@ -946,27 +915,27 @@
     const isMoving = len > 0;
     if (isMoving) { moveX /= len; moveZ /= len; }
 
-    const footInWater = isWaterAt(Math.floor(player.pos.x), Math.floor(player.pos.y - 1), Math.floor(player.pos.z));
-    const headInWater = isWaterAt(Math.floor(player.pos.x), Math.floor(player.pos.y), Math.floor(player.pos.z));
-    player.inWater = footInWater || headInWater;
+    // [수정] 수중 판단: 플레이어 위치 기준 y 좌표가 해수면(SEA_LEVEL) 이하인 경우
+    const headInWater = player.pos.y <= SEA_LEVEL + 0.2 && heightAt(Math.floor(player.pos.x), Math.floor(player.pos.z)) <= SEA_LEVEL;
+    player.inWater = headInWater;
 
     if (headInWater) {
       waterOverlayEl.style.display = 'block';
       scene.background = waterFogColor;
-      scene.fog = new THREE.Fog(waterFogColor, 2, 12);
+      scene.fog = new THREE.Fog(waterFogColor, 4, 18);
     } else {
       waterOverlayEl.style.display = 'none';
       scene.background = skyColor;
-      scene.fog = new THREE.Fog(skyColor, 20, 48);
+      scene.fog = new THREE.Fog(skyColor, 24, 56);
     }
 
     if (player.inWater) {
       player.velocity.x = moveX * MOVE_SPEED * 0.7;
       player.velocity.z = moveZ * MOVE_SPEED * 0.7;
       if (keys['Space']) {
-        player.velocity.y = 7.5;
+        player.velocity.y = 6.0;
       } else {
-        player.velocity.y = -2.0;
+        player.velocity.y = -1.5;
       }
     } else {
       player.velocity.x = moveX * MOVE_SPEED;
@@ -1022,11 +991,9 @@
     camera.lookAt(target);
 
     sun.position.set(player.pos.x + 40, player.pos.y + 60, player.pos.z + 30);
-    sun.target.position.copy(player.pos);
-    sun.target.updateMatrixWorld();
   }
 
-  // ---------- HUD & Main Loop ----------
+  // ---------- Loop ----------
   let lastTime = performance.now();
   let frameCount = 0;
   let fpsTimer = 0;
