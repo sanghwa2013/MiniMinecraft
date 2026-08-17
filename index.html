@@ -41,10 +41,15 @@
   #water-overlay {
     position: fixed;
     inset: 0;
-    background: rgba(20, 80, 160, 0.28);
+    background: rgba(20, 80, 160, 0.35);
+    backdrop-filter: blur(1px);
     pointer-events: none;
     z-index: 5;
-    display: none;
+    opacity: 0;
+    transition: opacity 0.25s ease-in-out;
+  }
+  #water-overlay.active {
+    opacity: 1;
   }
 
   #hotbar {
@@ -231,13 +236,20 @@
       gain.gain.setValueAtTime(0.15, now);
       gain.gain.exponentialRampToValueAtTime(0.01, now + 0.06);
       osc.start(now); osc.stop(now + 0.06);
+    } else if (type === 'splash') {
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(180, now);
+      osc.frequency.exponentialRampToValueAtTime(80, now + 0.2);
+      gain.gain.setValueAtTime(0.3, now);
+      gain.gain.exponentialRampToValueAtTime(0.01, now + 0.2);
+      osc.start(now); osc.stop(now + 0.2);
     }
   }
 
   // ---------- Scene setup ----------
   const scene = new THREE.Scene();
   const skyColor = new THREE.Color(0x7ec0ee);
-  const waterFogColor = new THREE.Color(0x246293);
+  const waterFogColor = new THREE.Color(0x1e537d);
   
   scene.background = skyColor;
   scene.fog = new THREE.Fog(skyColor, 24, 56);
@@ -279,9 +291,14 @@
     return new THREE.Color().setHSL(hsl.h, hsl.s, Math.min(1, Math.max(0, hsl.l + dl)));
   }
   function makeCanvas() { const c = document.createElement('canvas'); c.width = 16; c.height = 16; return c; }
-  function toTexture(canvas) {
+  function toTexture(canvas, wrap = false) {
     const tex = new THREE.CanvasTexture(canvas);
-    tex.magFilter = THREE.NearestFilter; tex.minFilter = THREE.NearestFilter; tex.needsUpdate = true;
+    tex.magFilter = THREE.NearestFilter; tex.minFilter = THREE.NearestFilter;
+    if (wrap) {
+      tex.wrapS = THREE.RepeatWrapping;
+      tex.wrapT = THREE.RepeatWrapping;
+    }
+    tex.needsUpdate = true;
     return tex;
   }
   function noiseTexture(colorHex, variance) {
@@ -345,12 +362,12 @@
     return toTexture(canvas);
   }
   function waterTexture() {
-    const base = new THREE.Color(0x3e8ed0);
+    const base = new THREE.Color(0x2f7cb7);
     const canvas = makeCanvas(); const ctx = canvas.getContext('2d');
     for (let y = 0; y < 16; y++) for (let x = 0; x < 16; x++) {
-      px(ctx, x, y, '#' + jitterColor(base, 0.12, x * 9 + y * 7).getHexString());
+      px(ctx, x, y, '#' + jitterColor(base, 0.1, x * 9 + y * 7).getHexString());
     }
-    return toTexture(canvas);
+    return toTexture(canvas, true);
   }
   function bedrockTexture() {
     const base = new THREE.Color(0x333333);
@@ -364,7 +381,7 @@
   // ---------- Block Definitions ----------
   const boxGeo = new THREE.BoxGeometry(1, 1, 1);
   
-  // [개선 1] 수면 격자선 완전 제거를 위해 상단 단일 평면(Plane) 지오메트리 사용
+  // 마인크래프트 높이 규격 (y + 0.85) 적용
   const waterPlaneGeo = new THREE.PlaneGeometry(1, 1);
   waterPlaneGeo.rotateX(-Math.PI / 2);
 
@@ -384,10 +401,11 @@
   const glassMat = new THREE.MeshLambertMaterial({ map: glassTexture(0xbfe8ff), transparent: true, opacity: 0.6, depthWrite: false });
   const bedrockMat = matFromTex(bedrockTexture());
   
+  const waterTex = waterTexture();
   const waterMat = new THREE.MeshLambertMaterial({ 
-    map: waterTexture(), 
+    map: waterTex, 
     transparent: true, 
-    opacity: 0.55,
+    opacity: 0.65,
     side: THREE.DoubleSide,
     depthWrite: false
   });
@@ -437,9 +455,9 @@
     if (layer.count >= layer.capacity) return;
     const idx = layer.count;
     
-    // 물 평면 위치 보정 (표면 위 높이 지정)
+    // 수면 높이를 마인크래프트 해수면 높이(0.85)로 배치해 경계 정돈
     if (typeIndex === WATER) {
-      tmpMat.makeTranslation(x + 0.5, y + 0.99, z + 0.5);
+      tmpMat.makeTranslation(x + 0.5, y + 0.85, z + 0.5);
     } else {
       tmpMat.makeTranslation(x + 0.5, y + 0.5, z + 0.5);
     }
@@ -642,7 +660,6 @@
           }
         }
 
-        // [개선] 해수면 위치에 단일 평면 물 표면만 딱 1개 배치하여 격자선 방지
         if (h < SEA_LEVEL) {
           addBlock(x, SEA_LEVEL, z, WATER);
         }
@@ -895,6 +912,7 @@
   const JUMP_SPEED = 8.5;
   const MOVE_SPEED = 5.5;
   let stepTimer = 0;
+  let wasInWater = false;
 
   function collidesPlayer(pos) {
     const minX = Math.floor(pos.x - player.radius), maxX = Math.floor(pos.x + player.radius);
@@ -920,29 +938,38 @@
     const isMoving = len > 0;
     if (isMoving) { moveX /= len; moveZ /= len; }
 
-    const headInWater = player.pos.y <= SEA_LEVEL + 0.2 && heightAt(Math.floor(player.pos.x), Math.floor(player.pos.z)) <= SEA_LEVEL;
+    const headInWater = player.pos.y <= SEA_LEVEL + 0.1 && heightAt(Math.floor(player.pos.x), Math.floor(player.pos.z)) < SEA_LEVEL;
     player.inWater = headInWater;
 
-    // [개선 2] 물속 입장 시 수면 메쉬를 감춰 수중 시야를 100% 맑게 유지
+    // 수중 진입/이탈 시 음향 및 부드러운 오버레이 처리
+    if (player.inWater !== wasInWater) {
+      playSound('splash');
+      wasInWater = player.inWater;
+    }
+
     if (headInWater) {
       waterMesh.visible = false;
-      waterOverlayEl.style.display = 'block';
-      scene.background = waterFogColor;
-      scene.fog = new THREE.Fog(waterFogColor, 2, 20);
+      waterOverlayEl.classList.add('active');
+      scene.background.lerp(waterFogColor, 0.2);
+      scene.fog.color.lerp(waterFogColor, 0.2);
+      scene.fog.near = 1;
+      scene.fog.far = 18;
     } else {
       waterMesh.visible = true;
-      waterOverlayEl.style.display = 'none';
-      scene.background = skyColor;
-      scene.fog = new THREE.Fog(skyColor, 24, 56);
+      waterOverlayEl.classList.remove('active');
+      scene.background.lerp(skyColor, 0.2);
+      scene.fog.color.lerp(skyColor, 0.2);
+      scene.fog.near = 24;
+      scene.fog.far = 56;
     }
 
     if (player.inWater) {
       player.velocity.x = moveX * MOVE_SPEED * 0.7;
       player.velocity.z = moveZ * MOVE_SPEED * 0.7;
       if (keys['Space']) {
-        player.velocity.y = 6.0;
+        player.velocity.y = 5.5;
       } else {
-        player.velocity.y = -1.5;
+        player.velocity.y = -1.2;
       }
     } else {
       player.velocity.x = moveX * MOVE_SPEED;
@@ -1009,6 +1036,10 @@
     requestAnimationFrame(animate);
     const dt = Math.min((now - lastTime) / 1000, 0.1);
     lastTime = now;
+
+    // 수면 오프셋 이동으로 잔잔한 물결 애니메이션 구현
+    waterTex.offset.x += dt * 0.04;
+    waterTex.offset.y += dt * 0.02;
 
     frameCount++;
     fpsTimer += dt;
