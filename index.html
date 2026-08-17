@@ -396,11 +396,12 @@
   const glassMat = new THREE.MeshLambertMaterial({ map: glassTexture(0xbfe8ff), transparent: true, opacity: 0.6 });
   const bedrockMat = matFromTex(bedrockTexture());
   
+  // [수정] depthWrite: false 적용하여 투명 블록 중복 렌더링 렉 대폭 감소
   const waterMat = new THREE.MeshLambertMaterial({ 
     map: waterTexture(), 
     transparent: true, 
-    opacity: 0.65, 
-    side: THREE.DoubleSide 
+    opacity: 0.6,
+    depthWrite: false
   });
 
   const grassMatArr = [grassSide, grassSide, grassTop, grassBottom, grassSide, grassSide];
@@ -435,7 +436,7 @@
   const waterMesh = new THREE.InstancedMesh(boxGeo, waterMat, CAPACITY[10]);
   waterMesh.count = 0;
   waterMesh.castShadow = false;
-  waterMesh.receiveShadow = true;
+  waterMesh.receiveShadow = false; // [수정] 수중 그림자 연산 비활성화
   waterMesh.renderOrder = 1;
   waterMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
   scene.add(waterMesh);
@@ -663,13 +664,12 @@
     const chunk = chunks.get(ck);
     if (!chunk || !chunk.loaded) return;
 
-    // 해당 청크 범위 안의 블록 지우기
     for (let lx = 0; lx < CHUNK_SIZE; lx++) {
       for (let lz = 0; lz < CHUNK_SIZE; lz++) {
         const x = cx * CHUNK_SIZE + lx;
         const z = cz * CHUNK_SIZE + lz;
         const h = heightAt(x, z);
-        const maxY = Math.max(h, SEA_LEVEL) + 10; // 나무 높이 수용을 위해 여유 있게 계산
+        const maxY = Math.max(h, SEA_LEVEL) + 10;
         for (let y = MIN_Y; y <= maxY; y++) {
           removeBlockAt(x, y, z);
         }
@@ -691,11 +691,8 @@
 
   function ensureChunksAroundPlayer(px, pz) {
     const pcx = Math.floor(px / CHUNK_SIZE), pcz = Math.floor(pz / CHUNK_SIZE);
-
-    // 1. 플레이어 범위 밖의 먼 청크 삭제 (InstancedMesh 인스턴스 해제)
     unloadFarChunks(pcx, pcz);
 
-    // 2. 플레이어 주변 청크 생성
     for (let dx = -RENDER_DISTANCE; dx <= RENDER_DISTANCE; dx++) {
       for (let dz = -RENDER_DISTANCE; dz <= RENDER_DISTANCE; dz++) {
         const cx = pcx + dx, cz = pcz + dz;
@@ -705,16 +702,32 @@
     }
   }
 
-  ensureChunksAroundPlayer(0, 0);
-
+  // [수정] 스폰 시 나무나 나뭇잎/잔디 블럭 내부 생성을 방지하도록 최상단 검사 로직 추가
   function getGrassSpawnPos() {
+    ensureChunksAroundPlayer(0, 0);
+
     for (let radius = 0; radius < 100; radius++) {
       for (let x = -radius; x <= radius; x++) {
         for (let z = -radius; z <= radius; z++) {
-          const h = heightAt(x, z);
-          if (h > SEA_LEVEL + 1) {
+          const terrainH = heightAt(x, z);
+          if (terrainH > SEA_LEVEL + 1) {
             ensureChunksAroundPlayer(x, z);
-            return new THREE.Vector3(x + 0.5, h + 1.8, z + 0.5);
+            
+            // 실질적으로 위에 쌓인 블록(나무, 잎 등) 중 가장 높은 Y축 검색
+            let topY = MIN_Y;
+            for (let y = 30; y >= MIN_Y; y--) {
+              const entry = world.get(key(x, y, z));
+              if (entry && entry.typeIndex !== WATER) {
+                topY = y;
+                break;
+              }
+            }
+
+            // 나무 줄기/잎 위가 아닌 평평한 잔디 블록 지형 위만 스폰지로 지정
+            const topBlock = world.get(key(x, topY, z));
+            if (topBlock && topBlock.typeIndex === GRASS) {
+              return new THREE.Vector3(x + 0.5, topY + 1.8, z + 0.5);
+            }
           }
         }
       }
