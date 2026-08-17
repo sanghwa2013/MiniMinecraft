@@ -628,41 +628,45 @@
     return c;
   }
 
-  function generateChunk(cx, cz) {
-    const ck = cx + ',' + cz;
-    let chunk = chunks.get(ck);
-    if (!chunk) { chunk = { modifications: new Map(), loaded: false }; chunks.set(ck, chunk); }
-    if (chunk.loaded) return;
-    chunk.loaded = true;
+function generateChunk(chunkX, chunkZ) {
+  const chunkKey = `${chunkX},${chunkZ}`;
+  // ... (기존 청크 설정)
 
-    for (let lx = 0; lx < CHUNK_SIZE; lx++) {
-      for (let lz = 0; lz < CHUNK_SIZE; lz++) {
-        const x = cx * CHUNK_SIZE + lx, z = cz * CHUNK_SIZE + lz;
-        const h = heightAt(x, z);
-        const maxY = Math.max(h, SEA_LEVEL);
+  for (let x = 0; x < CHUNK_SIZE; x++) {
+    for (let z = 0; z < CHUNK_SIZE; z++) {
+      const worldX = chunkX * CHUNK_SIZE + x;
+      const worldZ = chunkZ * CHUNK_SIZE + z;
 
-        for (let y = MIN_Y; y <= maxY; y++) {
-          const k = key(x, y, z);
+      // 노이즈 기반 표면 높이 계산 (예시)
+      const surfaceY = getSurfaceHeight(worldX, worldZ); 
 
-          if (chunk.modifications.has(k)) {
-            const mod = chunk.modifications.get(k);
-            if (mod.action === 'add') addBlock(x, y, z, mod.typeIndex);
-          } else {
-            if (y === MIN_Y) {
-              addBlock(x, y, z, BEDROCK);
-            } else if (y <= h) {
-              if (y === h) {
-                if (h <= SEA_LEVEL + 1) addBlock(x, y, z, SAND);
-                else addBlock(x, y, z, GRASS);
-              } else if (y > h - 3) {
-                if (h <= SEA_LEVEL + 1) addBlock(x, y, z, SAND);
-                else addBlock(x, y, z, DIRT);
-              } else {
-                addBlock(x, y, z, STONE);
-              }
-            } 
-          }
+      // 1. 맨 바닥: 베드락 (Y = 0)
+      addBlockToWorld(worldX, 0, worldZ, BEDROCK);
+
+      // 2. 바닥 위부터 표면 바로 밑까지: 빠짐없이 '돌(STONE)'로 채우기
+      for (let y = 1; y < surfaceY - 3; y++) {
+        addBlockToWorld(worldX, y, worldZ, STONE);
+      }
+
+      // 3. 표면 근처: 흙(DIRT) 레이어 (약 3칸)
+      for (let y = Math.max(1, surfaceY - 3); y < surfaceY; y++) {
+        addBlockToWorld(worldX, y, worldZ, DIRT);
+      }
+
+      // 4. 맨 위 표면: 잔디(GRASS) 또는 해수면 이하일 경우 처리
+      if (surfaceY <= SEA_LEVEL) {
+        addBlockToWorld(worldX, surfaceY, worldZ, DIRT);
+        
+        // 해수면까지 '물(WATER)' 채우기
+        for (let wy = surfaceY + 1; wy <= SEA_LEVEL; wy++) {
+          addBlockToWorld(worldX, wy, worldZ, WATER);
         }
+      } else {
+        addBlockToWorld(worldX, surfaceY, worldZ, GRASS);
+      }
+    }
+  }
+}
 
         if (h < SEA_LEVEL) {
           addBlock(x, SEA_LEVEL, z, WATER);
@@ -821,7 +825,8 @@
     return entry && entry.typeIndex !== WATER;
   }
 
-function getTargetedBlock() {
+// ignoreWater가 true이면 물을 무시하고 물속의 단단한 블록을 타겟팅함
+function getTargetedBlock(ignoreWater = false) {
   const dir = new THREE.Vector3();
   camera.getWorldDirection(dir);
   const origin = camera.position;
@@ -841,9 +846,13 @@ function getTargetedBlock() {
     const k = key(x, y, z);
     const entry = world.get(k);
 
-    // 단단한 블록이거나, 물 블록인 경우 모두 타겟으로 잡음
     if (entry) {
-      return { gx: x, gy: y, gz: z, px: x - normX, py: y - normY, pz: z - normZ, typeIndex: entry.typeIndex };
+      // 물을 무시하는 모드이고 현재 위치가 물이라면 통과
+      if (ignoreWater && entry.typeIndex === WATER) {
+        // pass
+      } else {
+        return { gx: x, gy: y, gz: z, px: x - normX, py: y - normY, pz: z - normZ, typeIndex: entry.typeIndex };
+      }
     }
 
     if (maxX < maxY) {
@@ -856,54 +865,41 @@ function getTargetedBlock() {
   }
   return null;
 }
-
+  
 function breakTargetedBlock() {
   triggerSwing();
-  const hit = getTargetedBlock();
+  // 물을 통과하여 물 바로 아래/속 블록을 정상 조준
+  const hit = getTargetedBlock(true);
   if (!hit) return;
-
-  // 물은 파괴 대상이 아님
-  if (hit.typeIndex === WATER) return;
 
   const k = key(hit.gx, hit.gy, hit.gz);
   const entry = world.get(k);
   if (entry) {
-    if (entry.typeIndex === BEDROCK) return; // 기반암 보호
+    if (entry.typeIndex === BEDROCK) return;
     spawnBlockParticles(hit.gx, hit.gy, hit.gz, BLOCK_DEFS[entry.typeIndex].color);
     playSound('break');
   }
 
+  // 부수려는 위치 주변 6방향에 물이 존재하는지 체크
+  const neighbors = [
+    key(hit.gx + 1, hit.gy, hit.gz), key(hit.gx - 1, hit.gy, hit.gz),
+    key(hit.gx, hit.gy + 1, hit.gz), key(hit.gx, hit.gy - 1, hit.gz),
+    key(hit.gx, hit.gy, hit.gz + 1), key(hit.gx, hit.gy, hit.gz - 1)
+  ];
+  const isAdjacentToWater = neighbors.some(nk => world.get(nk)?.typeIndex === WATER);
+
   const c = chunkFor(hit.gx, hit.gz);
-  
-  // 선택한 블록 일단 제거
   removeBlockAt(hit.gx, hit.gy, hit.gz);
 
-  // 해수면(SEA_LEVEL) 이하 위치인 경우 처리
-  if (hit.gy <= SEA_LEVEL) {
-    const neighbors = [
-      key(hit.gx + 1, hit.gy, hit.gz), key(hit.gx - 1, hit.gy, hit.gz),
-      key(hit.gx, hit.gy + 1, hit.gz), key(hit.gx, hit.gy - 1, hit.gz),
-      key(hit.gx, hit.gy, hit.gz + 1), key(hit.gx, hit.gy, hit.gz - 1)
-    ];
-
-    // 주변 6방향에 물이 하나라도 접해있는지 확인
-    const isAdjacentToWater = neighbors.some(nk => world.get(nk)?.typeIndex === WATER);
-
-    // 물과 닿아있거나 해수면 높이라면 '즉시' 물로 교체 후 퍼뜨림
-    if (isAdjacentToWater || hit.gy === SEA_LEVEL) {
-      c.modifications.set(k, { action: 'add', typeIndex: WATER });
-      addBlock(hit.gx, hit.gy, hit.gz, WATER);
-      
-      // 즉시 연쇄 물 확산 실행
-      updateWaterFlow();
-    } else {
-      c.modifications.set(k, { action: 'remove' });
-    }
+  // 물과 직접 맞닿아 있던 블록일 때만 물로 채움
+  if (isAdjacentToWater) {
+    c.modifications.set(k, { action: 'add', typeIndex: WATER });
+    addBlock(hit.gx, hit.gy, hit.gz, WATER);
+    updateWaterFlow();
   } else {
     c.modifications.set(k, { action: 'remove' });
   }
 }
-
   renderer.domElement.addEventListener('mousedown', (e) => {
     if (!started) return;
     if (e.button === 0) breakTargetedBlock();
@@ -998,6 +994,26 @@ function breakTargetedBlock() {
         }
       }
     }
+  }
+}
+
+// 1) 물 Material 설정에서 depthWrite 끄기
+const waterMaterial = new THREE.MeshStandardMaterial({
+  color: 0x3399ff,
+  transparent: true,
+  opacity: 0.6,
+  depthWrite: false, // 물 블록 내부가 비치는 현상 제거
+  roughness: 0.1
+});
+
+// 2) 매 프레임 업데이트되는 윤곽선 처리 부분
+function updateSelectionBox() {
+  const hit = getTargetedBlock(true); // 물 관통 타겟
+  if (hit && hit.typeIndex !== WATER) {
+    selectionMesh.position.set(hit.gx + 0.5, hit.gy + 0.5, hit.gz + 0.5);
+    selectionMesh.visible = true;
+  } else {
+    selectionMesh.visible = false; // 물 조준 시 검정 선 숨김
   }
 }
 
