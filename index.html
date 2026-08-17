@@ -251,8 +251,8 @@
   const skyColor = new THREE.Color(0x7ec0ee);
   const waterFogColor = new THREE.Color(0x1e537d);
   
-  scene.background = skyColor;
-  scene.fog = new THREE.Fog(skyColor, 24, 56);
+  scene.background = skyColor.clone();
+  scene.fog = new THREE.Fog(skyColor.clone(), 24, 56);
 
   const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.05, 1000);
 
@@ -546,6 +546,12 @@
 
   function updateHeldBlockMaterial(typeIndex) {
     heldBlockMesh.material = BLOCK_DEFS[typeIndex].material;
+    // 유리를 들었을 경우 손 메쉬 숨기기
+    if (typeIndex === GLASS) {
+      handMesh.visible = false;
+    } else {
+      handMesh.visible = true;
+    }
   }
 
   let swingTime = 0;
@@ -564,20 +570,25 @@
       bobY = Math.abs(Math.cos(time)) * 0.03;
     }
 
-    let swingAngle = 0;
+    let swingProgress = 0;
     if (isSwinging) {
-      swingTime += dt * 15;
+      swingTime += dt * 18;
       if (swingTime >= Math.PI) {
         swingTime = 0;
         isSwinging = false;
       } else {
-        swingAngle = Math.sin(swingTime) * 0.8;
+        swingProgress = Math.sin(swingTime);
       }
     }
 
-    handGroup.position.set(bobX, bobY - swingAngle * 0.1, swingAngle * 0.1);
-    handGroup.rotation.x = swingAngle;
-    handGroup.rotation.y = -swingAngle * 0.5;
+    // 위에서 밑으로 내리치는 모션 적용
+    handGroup.position.set(
+      bobX, 
+      bobY + swingProgress * 0.15, 
+      -swingProgress * 0.2
+    );
+    handGroup.rotation.x = -swingProgress * 1.1; 
+    handGroup.rotation.y = swingProgress * 0.3;
   }
 
   // ---------- Terrain & Biomes & Trees ----------
@@ -952,8 +963,9 @@
       scene.fog.far = 18;
     } else {
       waterOverlayEl.classList.remove('active');
-      scene.background.lerp(skyColor, 0.2);
-      scene.fog.color.lerp(skyColor, 0.2);
+      // 원래 배경/안개 색상(skyColor)으로 완전 복구
+      scene.background.copy(skyColor);
+      scene.fog.color.copy(skyColor);
       scene.fog.near = 24;
       scene.fog.far = 56;
     }
