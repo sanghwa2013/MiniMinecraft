@@ -826,7 +826,7 @@ function generateChunk(chunkX, chunkZ) {
   }
 
 // ignoreWater가 true이면 물을 무시하고 물속의 단단한 블록을 타겟팅함
-function getTargetedBlock(ignoreWater = false) {
+function getTargetedBlock(ignoreWater = true) {
   const dir = new THREE.Vector3();
   camera.getWorldDirection(dir);
   const origin = camera.position;
@@ -847,9 +847,9 @@ function getTargetedBlock(ignoreWater = false) {
     const entry = world.get(k);
 
     if (entry) {
-      // 물을 무시하는 모드이고 현재 위치가 물이라면 통과
+      // 물 관통 설정 시 물 블록은 지나침
       if (ignoreWater && entry.typeIndex === WATER) {
-        // pass
+        // 계속 통과
       } else {
         return { gx: x, gy: y, gz: z, px: x - normX, py: y - normY, pz: z - normZ, typeIndex: entry.typeIndex };
       }
@@ -868,19 +868,17 @@ function getTargetedBlock(ignoreWater = false) {
   
 function breakTargetedBlock() {
   triggerSwing();
-  // 물을 통과하여 물 바로 아래/속 블록을 정상 조준
-  const hit = getTargetedBlock(true);
+  const hit = getTargetedBlock(true); // 물을 관통하여 내부 블록 조준
   if (!hit) return;
 
   const k = key(hit.gx, hit.gy, hit.gz);
   const entry = world.get(k);
-  if (entry) {
-    if (entry.typeIndex === BEDROCK) return;
-    spawnBlockParticles(hit.gx, hit.gy, hit.gz, BLOCK_DEFS[entry.typeIndex].color);
-    playSound('break');
-  }
+  if (!entry || entry.typeIndex === BEDROCK) return;
 
-  // 부수려는 위치 주변 6방향에 물이 존재하는지 체크
+  spawnBlockParticles(hit.gx, hit.gy, hit.gz, BLOCK_DEFS[entry.typeIndex].color);
+  playSound('break');
+
+  // 부수려는 칸의 6방향 이웃에 물이 존재하는지 확인
   const neighbors = [
     key(hit.gx + 1, hit.gy, hit.gz), key(hit.gx - 1, hit.gy, hit.gz),
     key(hit.gx, hit.gy + 1, hit.gz), key(hit.gx, hit.gy - 1, hit.gz),
@@ -891,22 +889,14 @@ function breakTargetedBlock() {
   const c = chunkFor(hit.gx, hit.gz);
   removeBlockAt(hit.gx, hit.gy, hit.gz);
 
-  // 물과 직접 맞닿아 있던 블록일 때만 물로 채움
+  // 이웃에 물이 닿아있는 '딱 그 한 칸'만 물로 채움 (확산 함수 호출 안 함)
   if (isAdjacentToWater) {
     c.modifications.set(k, { action: 'add', typeIndex: WATER });
     addBlock(hit.gx, hit.gy, hit.gz, WATER);
-    updateWaterFlow();
   } else {
     c.modifications.set(k, { action: 'remove' });
   }
 }
-  renderer.domElement.addEventListener('mousedown', (e) => {
-    if (!started) return;
-    if (e.button === 0) breakTargetedBlock();
-    else if (e.button === 2) placeTargetedBlock();
-  });
-  renderer.domElement.addEventListener('contextmenu', (e) => e.preventDefault());
-
   // ---------- Outline ----------
   const outlineGeo = new THREE.EdgesGeometry(new THREE.BoxGeometry(1.005, 1.005, 1.005));
   const outlineMat = new THREE.LineBasicMaterial({ color: 0x000000, linewidth: 2 });
@@ -924,34 +914,29 @@ function breakTargetedBlock() {
     }
   }
 
-  function placeTargetedBlock() {
+function placeTargetedBlock() {
   triggerSwing();
-  const hit = getTargetedBlock();
+  const hit = getTargetedBlock(true);
   if (!hit) return;
 
-  let nx = hit.px, ny = hit.py, nz = hit.pz;
+  const nx = hit.px, ny = hit.py, nz = hit.pz;
 
-  // 만약 클릭한 블록 자체가 '물'인 경우, 물이 있는 바로 그 자리에 블록을 덮어써서 설치
-  if (hit.typeIndex === WATER) {
-    nx = hit.gx;
-    ny = hit.gy;
-    nz = hit.gz;
-  }
-
-  // 플레이어 몸과 겹치는지 체크
+  // 플레이어 몸과 겹침 방지
   const pMinX = player.pos.x - player.radius, pMaxX = player.pos.x + player.radius;
   const pMinZ = player.pos.z - player.radius, pMaxZ = player.pos.z + player.radius;
   const pMinY = player.pos.y - player.height, pMaxY = player.pos.y;
 
   if (pMinX < nx + 1 && pMaxX > nx && pMinY < ny + 1 && pMaxY > ny && pMinZ < nz + 1 && pMaxZ > nz) return;
 
-  // 이미 물이 있는 칸이라면 기존 물을 지우고 새 블록 설치
-  if (world.has(key(nx, ny, nz))) {
+  const targetKey = key(nx, ny, nz);
+  
+  // 설치하려는 위치에 물이 있으면 기존 물을 지우고 덮어씀
+  if (world.has(targetKey)) {
     removeBlockAt(nx, ny, nz);
   }
 
   const c = chunkFor(nx, nz);
-  c.modifications.set(key(nx, ny, nz), { action: 'add', typeIndex: selectedSlot });
+  c.modifications.set(targetKey, { action: 'add', typeIndex: selectedSlot });
   addBlock(nx, ny, nz, selectedSlot);
   playSound('place');
 }
@@ -997,23 +982,24 @@ function breakTargetedBlock() {
   }
 }
 
-// 1) 물 Material 설정에서 depthWrite 끄기
+// 물 Material 설정 (깨끗한 그래픽 처리)
 const waterMaterial = new THREE.MeshStandardMaterial({
   color: 0x3399ff,
   transparent: true,
-  opacity: 0.6,
-  depthWrite: false, // 물 블록 내부가 비치는 현상 제거
-  roughness: 0.1
+  opacity: 0.5,
+  depthWrite: false,
+  side: THREE.DoubleSide
 });
 
-// 2) 매 프레임 업데이트되는 윤곽선 처리 부분
+// 윤곽선 업데이트 부분 (물 블록 조준 시 검정 선 완전히 숨김)
 function updateSelectionBox() {
-  const hit = getTargetedBlock(true); // 물 관통 타겟
+  const hit = getTargetedBlock(true);
+  
   if (hit && hit.typeIndex !== WATER) {
     selectionMesh.position.set(hit.gx + 0.5, hit.gy + 0.5, hit.gz + 0.5);
     selectionMesh.visible = true;
   } else {
-    selectionMesh.visible = false; // 물 조준 시 검정 선 숨김
+    selectionMesh.visible = false;
   }
 }
 
